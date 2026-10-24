@@ -84,21 +84,24 @@ var claims = []consumerClaim{
 	{
 		name: "polydb",
 		dir:  "polydb/go",
-		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + SQLite/MySQL/PG/MSSQL/Oracle 五引擎目录与 DDL 接内核, Redis 仍自持)",
+		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + SQLite/MySQL/PG/MSSQL/Oracle 五引擎目录与 DDL + Redis KV 均接内核)",
 		requires: []string{
 			"github.com/dbcore/dbcore",
 			"github.com/dbcore/dbcore/mysql",
 			"github.com/dbcore/dbcore/postgres",
 			"github.com/dbcore/dbcore/mssql",
 			"github.com/dbcore/dbcore/oracle",
+			"github.com/dbcore/dbcore/redis",
 			"github.com/polydb/polydb/pkg/dbcore/bridge",
 		},
 		// 只有这些包的 import 列表会被检查 (见 dbcoreImportDirs)。四引擎的目录/
-		// DDL 经 NewFromDB 委托内核驱动 (P1-5)；执行/事务/浏览分页与 Redis KV
-		// 仍是 polydb 自有实现 (见 polydb AGENTS.md 的边界声明)。
+		// DDL 经 NewFromDB 委托内核驱动, Redis 经 KVDriver 委托 (P1-5, 含 D5
+		// 续扫/结构化 RESP/流条目三个内核增值接口)；执行/事务/表浏览分页仍是
+		// polydb 自有实现 (见 polydb AGENTS.md 的边界声明)。
 		dbcoreImportDirs: []string{
 			"pkg/dbcore/bridge", "pkg/dbsqlite",
 			"pkg/dbmysql", "pkg/dbpostgres", "pkg/dbmssql", "pkg/dboracle",
+			"pkg/dbredis",
 		},
 	},
 }

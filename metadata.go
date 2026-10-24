@@ -1,6 +1,7 @@
 package dbcore
 
 import (
+	"context"
 	"strings"
 	"time"
 )
@@ -170,6 +171,17 @@ type RedisValue struct {
 	// Scores is only populated for sorted sets and runs parallel to Items.
 	Scores []float64
 	Hash   map[string]string
+	// Stream carries the entries of a stream key with identity and fields kept
+	// separate, so a consumer renders its own display format instead of parsing
+	// a rendered blob (Items keeps the flat "id k=v" rendering for callers
+	// built before Stream existed).
+	Stream []RedisStreamEntry
+}
+
+// RedisStreamEntry is one stream entry: the server-assigned ID and its fields.
+type RedisStreamEntry struct {
+	ID     string
+	Fields []RedisField
 }
 
 // RedisElement identifies one editable cell inside a key: Identity names the
@@ -217,4 +229,61 @@ type RedisScanPage struct {
 
 type RedisReply struct {
 	Raw string
+}
+
+// RedisKeyEntry is one key of an enriched SCAN page: identity fused with type
+// and remaining lifetime, so a consumer can render a page with one driver call
+// instead of one TYPE+TTL round trip per key.
+type RedisKeyEntry struct {
+	Key  string
+	Kind RedisKeyType
+	// TTL collapses a raw TTL reply to seconds: positive = remaining seconds;
+	// TTLNoExpiry / TTLMissing pass the sentinel through as-is. Nil means no
+	// TTL was reported.
+	TTL *int64
+}
+
+// Raw TTL sentinels as a TTL/PTTL reply reports them.
+const (
+	TTLNoExpiry int64 = -1
+	TTLMissing  int64 = -2
+)
+
+// EnrichedScanPage is what KeyScanner.ScanKeysEnriched returns.
+type EnrichedScanPage struct {
+	Cursor uint64
+	Keys   []RedisKeyEntry
+}
+
+// KeyScanner is optionally implemented by KV drivers that fuse the per-key
+// type/TTL enrichment and the "fill the page" scan loop into the driver: scan
+// rounds continue until count keys are collected, the cursor is exhausted, or
+// the round cap (100, spec/behavior.md §1.3 "D5") is hit — the continuation
+// cursor then names the real resume point.
+type KeyScanner interface {
+	ScanKeysEnriched(ctx context.Context, cursor uint64, pattern string, count int) (*EnrichedScanPage, error)
+}
+
+// Structured RESP reply kinds (TypedCommander).
+const (
+	RedisReplyKindNull       = "null"
+	RedisReplyKindBulkString = "bulk_string"
+	RedisReplyKindInteger    = "integer"
+	RedisReplyKindError      = "error"
+	RedisReplyKindArray      = "array"
+)
+
+// RedisTypedReply is a structured alternative to RedisReply's rendered text:
+// simple and bulk strings both collapse to bulk_string (go-redis cannot tell
+// them apart, and the Rust redis crate reads both as bulk), nil is null, and
+// errors nested in arrays keep their kind.
+type RedisTypedReply struct {
+	Kind  string // RedisReplyKind*
+	Value any    // string | int64 | []RedisTypedReply
+}
+
+// TypedCommander is optionally implemented by KV drivers that can return the
+// raw command reply as structure instead of rendered text.
+type TypedCommander interface {
+	ExecCommandTyped(ctx context.Context, args []string) (RedisTypedReply, error)
 }

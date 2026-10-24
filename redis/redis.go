@@ -28,7 +28,15 @@ var (
 	_ dbcore.ElementDeleter = (*RedisDriver)(nil)
 	_ dbcore.RowAppender    = (*RedisDriver)(nil)
 	_ dbcore.KeyAdmin       = (*RedisDriver)(nil)
+	_ dbcore.KeyScanner     = (*RedisDriver)(nil)
+	_ dbcore.TypedCommander = (*RedisDriver)(nil)
 )
+
+// ScanMaxRounds caps the rounds one ScanKeysEnriched call may chain (D5,
+// spec/behavior.md §1.3): fill count keys, exhaust the cursor, or stop here
+// with a real continuation cursor. Exported because the cap is a cross-
+// implementation contract value (the Rust driver carries the same number).
+const ScanMaxRounds = 100
 
 // RedisDriver is a dbcore.KVDriver backed by a go-redis client.
 type RedisDriver struct {
@@ -125,6 +133,54 @@ func (d *RedisDriver) KeyType(ctx context.Context, key string) (dbcore.RedisKeyT
 	return redisKeyType(t), nil
 }
 
+// ScanKeysEnriched is the D5 "fill the page" scan: rounds continue until count
+// keys are collected, the cursor returns to 0, or the round cap is reached,
+// and every key carries its TYPE and remaining TTL so a page renders in one
+// call. TTL collapses to seconds when positive; the raw sentinels (-1 no
+// expiry, -2 missing) pass through like the bare TTL/PTTL reply would.
+func (d *RedisDriver) ScanKeysEnriched(ctx context.Context, cursor uint64, pattern string, count int) (*dbcore.EnrichedScanPage, error) {
+	if pattern == "" {
+		pattern = "*"
+	}
+	if count <= 0 {
+		count = defaultScanCount
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	page := &dbcore.EnrichedScanPage{Keys: []dbcore.RedisKeyEntry{}}
+	for round := 0; round < ScanMaxRounds; round++ {
+		keys, next, err := d.client.Scan(ctx, cursor, pattern, int64(count)).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range keys {
+			typ, err := d.client.Type(ctx, k).Result()
+			if err != nil {
+				return nil, err
+			}
+			ttl := d.client.TTL(ctx, k).Val()
+			// go-redis returns -1ns / -2ns for the no-expiry and missing
+			// sentinels; positive values are whole seconds. Dividing a negative
+			// would truncate -1ns to 0, so negatives keep their raw value.
+			ttlSec := int64(ttl / time.Second)
+			if ttl < 0 {
+				ttlSec = int64(ttl)
+			}
+			page.Keys = append(page.Keys, dbcore.RedisKeyEntry{
+				Key:  k,
+				Kind: redisKeyType(typ),
+				TTL:  &ttlSec,
+			})
+		}
+		cursor = next
+		if cursor == 0 || len(page.Keys) >= count {
+			break
+		}
+	}
+	page.Cursor = cursor
+	return page, nil
+}
+
 func (d *RedisDriver) GetValue(ctx context.Context, key string) (dbcore.RedisValue, error) {
 	// Hold the read lock across TYPE + read so a concurrent SelectDB cannot
 	// close the client between the two commands.
@@ -186,11 +242,14 @@ func (d *RedisDriver) GetValue(ctx context.Context, key string) (dbcore.RedisVal
 		v := dbcore.RedisValue{Type: dbcore.RedisStream}
 		for _, m := range msgs {
 			fields := make([]string, 0, len(m.Values))
+			entry := dbcore.RedisStreamEntry{ID: m.ID}
 			for k, val := range m.Values {
 				fields = append(fields, fmt.Sprintf("%s=%v", k, val))
+				entry.Fields = append(entry.Fields, dbcore.RedisField{Name: k, Value: fmt.Sprint(val)})
 			}
 			sort.Strings(fields)
 			v.Items = append(v.Items, m.ID+" "+strings.Join(fields, " "))
+			v.Stream = append(v.Stream, entry)
 		}
 		return v, nil
 	default:
@@ -476,6 +535,53 @@ func (d *RedisDriver) ExecCommand(ctx context.Context, args []string) (dbcore.Re
 		return dbcore.RedisReply{}, err
 	}
 	return dbcore.RedisReply{Raw: formatReply(res)}, nil
+}
+
+// ExecCommandTyped is ExecCommand with the reply as structure: simple/bulk
+// strings collapse to bulk_string, nil is null, and errors (including ones
+// nested in arrays) keep their kind. An empty command is reported as an
+// error-kind reply, not a Go error, matching the RESP view a command editor
+// shows.
+func (d *RedisDriver) ExecCommandTyped(ctx context.Context, args []string) (dbcore.RedisTypedReply, error) {
+	if len(args) == 0 {
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindError, Value: "empty command"}, nil
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	res, err := d.client.Do(ctx, stringArgs(args)...).Result()
+	if err != nil {
+		if errors.Is(err, goredis.Nil) {
+			// GET on a missing key returns null, not an error.
+			return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindNull}, nil
+		}
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindError, Value: err.Error()}, nil
+	}
+	return typedReply(res), nil
+}
+
+// typedReply maps a go-redis raw RESP value onto the structured reply kinds.
+func typedReply(v any) dbcore.RedisTypedReply {
+	switch r := v.(type) {
+	case nil:
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindNull}
+	case string:
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindBulkString, Value: r}
+	case []byte:
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindBulkString, Value: string(r)}
+	case int64:
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindInteger, Value: r}
+	case error:
+		// proto.RedisError, as found nested inside arrays.
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindError, Value: r.Error()}
+	case []any:
+		arr := make([]dbcore.RedisTypedReply, len(r))
+		for i, e := range r {
+			arr[i] = typedReply(e)
+		}
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindArray, Value: arr}
+	default:
+		return dbcore.RedisTypedReply{Kind: dbcore.RedisReplyKindBulkString, Value: fmt.Sprint(r)}
+	}
 }
 
 func redisKeyType(t string) dbcore.RedisKeyType {
