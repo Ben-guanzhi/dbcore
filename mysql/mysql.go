@@ -156,6 +156,9 @@ func (d *MySQLDriver) ListColumns(ctx context.Context, schema, table string) ([]
 			Nullable:     r[2].S == "YES",
 			IsPrimaryKey: r[4].S == "PRI",
 			Comment:      r[5].S,
+			// r[6] = ORDINAL_POSITION, r[7] = 1/0 auto_increment flag.
+			OrdinalPosition: int32(r[6].I),
+			IsAutoIncrement: r[7].I != 0,
 		}
 		if r[3].Kind != dbcore.ValNull {
 			s := r[3].S
@@ -358,7 +361,8 @@ func (l MySQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) 
 			WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}}
 	case dbcore.CatalogColumns:
-		return `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, COLUMN_COMMENT
+		return `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, COLUMN_COMMENT,
+				ORDINAL_POSITION, COALESCE(EXTRA, '') LIKE '%auto_increment%'
 			FROM information_schema.COLUMNS
 			WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}

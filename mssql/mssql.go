@@ -157,6 +157,9 @@ func (d *MSSQLDriver) ListColumns(ctx context.Context, schema, table string) ([]
 			Nullable:     r[2].S == "YES",
 			IsPrimaryKey: r[4].I != 0,
 			Comment:      r[5].S,
+			// r[6] = ORDINAL_POSITION, r[7] = 1/0 COLUMNPROPERTY IsIdentity flag.
+			OrdinalPosition: int32(r[6].I),
+			IsAutoIncrement: r[7].I != 0,
 		}
 		if r[3].Kind != dbcore.ValNull {
 			s := r[3].S
@@ -257,6 +260,9 @@ func (d *MSSQLDriver) CreateTableSQL(ctx context.Context, schema, table string) 
 		b.WriteString(d.dialect.QuoteIdent(c.Name))
 		b.WriteString(" ")
 		b.WriteString(c.Type)
+		if c.IsAutoIncrement {
+			b.WriteString(" IDENTITY(1,1)")
+		}
 		if c.Nullable {
 			b.WriteString(" NULL")
 		} else {
@@ -433,8 +439,12 @@ END`
 func (MSSQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (string, []dbcore.Value) {
 	switch kind {
 	case dbcore.CatalogSchemas:
+		// db_* / ##% are database-fixed and temp system schemas (consolidated
+		// from polydb, P1-5); a connection target list should not offer them.
 		return `SELECT name FROM sys.schemas
 			WHERE name NOT IN (N'sys', N'INFORMATION_SCHEMA', N'guest')
+				AND name NOT LIKE N'db\_%' ESCAPE N'\'
+				AND name NOT LIKE N'##%'
 			ORDER BY name`, nil
 	case dbcore.CatalogTables:
 		return `SELECT t.TABLE_SCHEMA, t.TABLE_NAME, t.TABLE_TYPE,
@@ -458,7 +468,10 @@ func (MSSQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (s
 	case dbcore.CatalogColumns:
 		return `SELECT c.COLUMN_NAME, ` + sqlTypeExpr + `, c.IS_NULLABLE, c.COLUMN_DEFAULT,
 				CASE WHEN pk.COLUMN_NAME IS NULL THEN 0 ELSE 1 END,
-				CAST(ep.value AS nvarchar(4000))
+				CAST(ep.value AS nvarchar(4000)),
+				c.ORDINAL_POSITION,
+				COLUMNPROPERTY(OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + N'.' + QUOTENAME(c.TABLE_NAME)),
+					c.COLUMN_NAME, 'IsIdentity')
 			FROM INFORMATION_SCHEMA.COLUMNS c
 			LEFT JOIN (
 				SELECT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME

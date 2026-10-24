@@ -45,6 +45,7 @@ var claims = []consumerClaim{
 		requires: []string{
 			"github.com/dbcore/dbcore",
 			"github.com/dbcore/dbcore/sqltext",
+			"github.com/dbcore/dbcore/keyset",
 			"github.com/dbcore/dbcore/mysql",
 			"github.com/dbcore/dbcore/postgres",
 			"github.com/dbcore/dbcore/mssql",
@@ -52,12 +53,14 @@ var claims = []consumerClaim{
 			"github.com/dbcore/dbcore/sqlite",
 			"github.com/dbcore/dbcore/redis",
 		},
-		requiresSymbols: []string{"dbcore.SQLDriver", "dbcore.SQLTxDriver"},
+		// keyset = P1-7：表浏览键集分页算法经 internal/paging 适配层消费内核
+		// dbcore/keyset（适配层不得长出引擎知识）。
+		requiresSymbols: []string{"dbcore.SQLDriver", "dbcore.SQLTxDriver", "keyset.Keys"},
 	},
 	{
 		name: "fynequery",
 		dir:  "fynequery",
-		doc:  "WORKSPACE.md §2 fynequery 行 (目录由内核驱动提供; 索引页经 dbcore.SQLDriver.ListIndexes)",
+		doc:  "WORKSPACE.md §2 fynequery 行 (冻结: 目录/索引/KV 只读消费, Session/DML/连接不再迁入内核 — INTEGRATION-PLAN P1-6)",
 		requires: []string{
 			"github.com/dbcore/dbcore",
 			"github.com/dbcore/dbcore/sqltext",
@@ -67,20 +70,36 @@ var claims = []consumerClaim{
 			"github.com/dbcore/dbcore/oracle",
 			"github.com/dbcore/dbcore/redis",
 		},
-		// fynequery 仍自持 Session/方言/DML, 但索引页已改为消费内核的结构化元数据
-		// (dbcore.IndexInfo) 而不是自己拼 information_schema SQL。
+		// fynequery 的接入深度已定格 (P1-6 裁定, 对应 DECISION §2.5 "冻结为组件参考"):
+		// 目录/索引经内核驱动只读消费, Redis 经 KVDriver, 方言字符串走 sqltext。
+		// Session.Query/DML/连接生命周期不再迁入内核 —— 出现下列任一符号即说明
+		// 冻结被打破, 请先更新 DECISION 再动代码。
 		requiresSymbols: []string{"dbcore.IndexInfo"},
+		forbids: []string{
+			"dbcore.Open(",      // 连接生命周期迁内核的标志
+			"dbcore.PoolConfig", // 连接池迁内核的标志
+			"dbcore.TxManager",  // DML/事务迁内核的标志
+		},
 	},
 	{
 		name: "polydb",
 		dir:  "polydb/go",
-		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + 仅 SQLite 驱动接入)",
+		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + SQLite/MySQL/PG/MSSQL/Oracle 五引擎目录与 DDL 接内核, Redis 仍自持)",
 		requires: []string{
 			"github.com/dbcore/dbcore",
+			"github.com/dbcore/dbcore/mysql",
+			"github.com/dbcore/dbcore/postgres",
+			"github.com/dbcore/dbcore/mssql",
+			"github.com/dbcore/dbcore/oracle",
 			"github.com/polydb/polydb/pkg/dbcore/bridge",
 		},
-		// 只有该包的 import 列表会被检查 (见 dbcoreImportDirs)。
-		dbcoreImportDirs: []string{"pkg/dbcore/bridge", "pkg/dbsqlite"},
+		// 只有这些包的 import 列表会被检查 (见 dbcoreImportDirs)。四引擎的目录/
+		// DDL 经 NewFromDB 委托内核驱动 (P1-5)；执行/事务/浏览分页与 Redis KV
+		// 仍是 polydb 自有实现 (见 polydb AGENTS.md 的边界声明)。
+		dbcoreImportDirs: []string{
+			"pkg/dbcore/bridge", "pkg/dbsqlite",
+			"pkg/dbmysql", "pkg/dbpostgres", "pkg/dbmssql", "pkg/dboracle",
+		},
 	},
 }
 

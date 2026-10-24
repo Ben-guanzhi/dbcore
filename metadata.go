@@ -16,7 +16,7 @@ type SchemaInfo struct {
 type TableInfo struct {
 	Schema  string
 	Name    string
-	Type    string // "table" | "view"
+	Type    string // "table" | "view" | "materialized_view" (PostgreSQL relkind 'm'; consumers without a matview concept can fold it into "view")
 	Comment string // object comment; empty when unset or the engine has none (SQLite)
 	// Rows is the engine's row-count estimate; -1 means unknown (views, SQLite,
 	// or statistics that have never been gathered). ApproxRows reports whether
@@ -32,6 +32,13 @@ type ColumnInfo struct {
 	Default      *string
 	IsPrimaryKey bool   // column participates in the primary key
 	Comment      string // column comment; empty when unset or the engine has none (SQLite)
+	// OrdinalPosition is the column's 1-based position in the table (attnum /
+	// ORDINAL_POSITION / column_id / cid+1); 0 when the engine reports none.
+	OrdinalPosition int32
+	// IsAutoIncrement reports identity/auto-increment columns (AUTO_INCREMENT,
+	// GENERATED ... AS IDENTITY, is_identity, identity_column). Serial columns
+	// created via pg_get_serial_sequence defaults are not detected.
+	IsAutoIncrement bool
 }
 
 // Index kind values reported by every driver.
@@ -104,8 +111,15 @@ const (
 	FilterEq   FilterOp = "="
 	FilterNeq  FilterOp = "!="
 	FilterGt   FilterOp = ">"
+	FilterGte  FilterOp = ">="
 	FilterLt   FilterOp = "<"
+	FilterLte  FilterOp = "<="
 	FilterLike FilterOp = "like"
+	// FilterIsNull and FilterIsNotNull compare against nothing: the value is
+	// ignored, and a driver renders them as IS NULL / IS NOT NULL rather than
+	// "= NULL", which SQL does not allow.
+	FilterIsNull    FilterOp = "is null"
+	FilterIsNotNull FilterOp = "is not null"
 )
 
 type FilterExpr struct {

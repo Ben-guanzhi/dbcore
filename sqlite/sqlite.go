@@ -118,6 +118,9 @@ func (d *SQLiteDriver) ListColumns(ctx context.Context, schema, table string) ([
 			Type:         r[1].S,
 			Nullable:     r[2].I == 0,
 			IsPrimaryKey: r[4].I > 0, // pragma_table_info.pk: 0 = not in the PK, n = PK position
+			// r[5] = cid + 1. SQLite has no per-column auto-increment flag in the
+			// pragma; INTEGER PRIMARY KEY rowid aliases stay IsAutoIncrement=false.
+			OrdinalPosition: int32(r[5].I),
 		}
 		if r[3].Kind != dbcore.ValNull {
 			s := r[3].S
@@ -338,7 +341,7 @@ func (l SQLiteDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string)
 		return `SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'`, nil
 	case dbcore.CatalogColumns:
 		// pragma_table_info is a table-valued function; the table name is a BOUND parameter (P0-4 safe).
-		return `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(?)`, []dbcore.Value{{Kind: dbcore.ValText, S: obj}}
+		return `SELECT name, type, "notnull", dflt_value, pk, cid + 1 FROM pragma_table_info(?)`, []dbcore.Value{{Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogIndexes:
 		return `SELECT name, "unique", origin FROM pragma_index_list(?)`, []dbcore.Value{{Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogForeignKeys:

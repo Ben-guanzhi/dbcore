@@ -101,11 +101,30 @@ func (d *OracleDriver) resolveSchema(ctx context.Context, schema string) (string
 	return res.Rows[0][0].S, nil
 }
 
+// maintainedSchemas lists Oracle's built-in maintenance schemas that a GUI
+// should not offer as connection targets (consolidated from polydb, P1-5).
+var maintainedSchemas = map[string]bool{
+	"SYS": true, "SYSTEM": true, "OUTLN": true, "DBSNMP": true, "APPQOSSYS": true,
+	"CTXSYS": true, "MDSYS": true, "ORDSYS": true, "ORDDATA": true, "ORDPLUGINS": true,
+	"SI_INFORMTN_SCHEMA": true, "WMSYS": true, "XDB": true, "XS$NULL": true, "DVSYS": true,
+	"AUDSYS": true, "GSMADMIN_INTERNAL": true, "OJVMSYS": true, "LBACSYS": true,
+}
+
 func (d *OracleDriver) ListSchemas(ctx context.Context) ([]dbcore.SchemaInfo, error) {
-	q, a := d.dialect.CatalogQuery(dbcore.CatalogSchemas, "", "")
-	res, err := dbcore.RunQuery(ctx, d.db, q, a)
+	// oracle_maintained (12c+) marks Oracle-supplied accounts directly; older
+	// instances lack the column and fall back to the exclusion list.
+	res, err := dbcore.RunQuery(ctx, d.db,
+		`SELECT username FROM all_users WHERE oracle_maintained = 'N' ORDER BY username`, nil)
 	if err != nil {
-		return nil, err
+		var where []string
+		for s := range maintainedSchemas {
+			where = append(where, "'"+s+"'")
+		}
+		q := "SELECT username FROM all_users WHERE username NOT IN (" + strings.Join(where, ",") + ") ORDER BY username"
+		res, err = dbcore.RunQuery(ctx, d.db, q, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := make([]dbcore.SchemaInfo, 0, len(res.Rows))
 	for _, r := range res.Rows {
@@ -155,6 +174,9 @@ func (d *OracleDriver) ListColumns(ctx context.Context, schema, table string) ([
 			Nullable:     r[2].S == "Y",
 			IsPrimaryKey: r[4].I != 0,
 			Comment:      r[5].S,
+			// r[6] = COLUMN_ID, r[7] = 1/0 identity-column flag.
+			OrdinalPosition: int32(r[6].I),
+			IsAutoIncrement: r[7].I != 0,
 		}
 		if r[3].Kind == dbcore.ValText && r[3].S != "" {
 			s := r[3].S
@@ -444,7 +466,9 @@ func (OracleDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (
 	case dbcore.CatalogColumns:
 		return `SELECT c.COLUMN_NAME, ` + sqlTypeExpr + `, c.NULLABLE, c.DATA_DEFAULT,
 				CASE WHEN pk.COLUMN_NAME IS NULL THEN 0 ELSE 1 END,
-				NVL(cm.COMMENTS, '')
+				NVL(cm.COMMENTS, ''),
+				c.COLUMN_ID,
+				CASE WHEN ic.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END
 			FROM ALL_TAB_COLUMNS c
 			LEFT JOIN (
 				SELECT cc.OWNER, cc.TABLE_NAME, cc.COLUMN_NAME
@@ -458,6 +482,9 @@ func (OracleDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (
 			LEFT JOIN ALL_COL_COMMENTS cm
 				ON cm.OWNER = c.OWNER AND cm.TABLE_NAME = c.TABLE_NAME
 				AND cm.COLUMN_NAME = c.COLUMN_NAME
+			LEFT JOIN ALL_TAB_IDENTITY_COLS ic
+				ON ic.OWNER = c.OWNER AND ic.TABLE_NAME = c.TABLE_NAME
+				AND ic.COLUMN_NAME = c.COLUMN_NAME
 			WHERE c.OWNER = :1 AND c.TABLE_NAME = :2
 			ORDER BY c.COLUMN_ID`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}

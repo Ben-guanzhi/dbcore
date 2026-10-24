@@ -123,7 +123,10 @@ func (d *PostgresDriver) ListTables(ctx context.Context, schema string) ([]dbcor
 	out := make([]dbcore.TableInfo, 0, len(res.Rows))
 	for _, r := range res.Rows {
 		kind := "table"
-		if strings.EqualFold(r[2].S, "VIEW") {
+		switch {
+		case strings.EqualFold(r[2].S, "MATERIALIZED VIEW"):
+			kind = "materialized_view"
+		case strings.EqualFold(r[2].S, "VIEW"):
 			kind = "view"
 		}
 		info := dbcore.TableInfo{Schema: r[0].S, Name: r[1].S, Type: kind, Comment: r[3].S, Rows: r[4].I}
@@ -151,6 +154,9 @@ func (d *PostgresDriver) ListColumns(ctx context.Context, schema, table string) 
 			Nullable:     r[2].S == "YES",
 			IsPrimaryKey: r[4].I != 0,
 			Comment:      r[5].S,
+			// r[6] = attnum (1-based), r[7] = 1/0 identity/generated flag.
+			OrdinalPosition: int32(r[6].I),
+			IsAutoIncrement: r[7].I != 0,
 		}
 		if r[3].Kind != dbcore.ValNull {
 			s := r[3].S
@@ -225,10 +231,10 @@ func (d *PostgresDriver) ListForeignKeys(ctx context.Context, schema, table stri
 }
 
 // CreateTableSQL reconstructs a CREATE TABLE script from the catalog: columns
-// (with type, nullability, defaults) plus the primary key. PostgreSQL keeps no
-// queryable copy of the original text, so this is a reconstruction, not
-// byte-identical DDL; it intentionally omits non-PK indexes, foreign keys and
-// identity/sequence ownership.
+// (with type, nullability, defaults, identity) plus the primary key. PostgreSQL
+// keeps no queryable copy of the original text, so this is a reconstruction,
+// not byte-identical DDL; it intentionally omits non-PK indexes, foreign keys
+// and sequence ownership.
 func (d *PostgresDriver) CreateTableSQL(ctx context.Context, schema, table string) (string, error) {
 	schema, err := d.resolveSchema(ctx, schema)
 	if err != nil {
@@ -251,6 +257,9 @@ func (d *PostgresDriver) CreateTableSQL(ctx context.Context, schema, table strin
 		b.WriteString(d.dialect.QuoteIdent(c.Name))
 		b.WriteString(" ")
 		b.WriteString(c.Type)
+		if c.IsAutoIncrement {
+			b.WriteString(" GENERATED ALWAYS AS IDENTITY")
+		}
 		if c.Nullable {
 			b.WriteString(" NULL")
 		} else {
@@ -384,7 +393,7 @@ func (l PostgresDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj strin
 	switch kind {
 	case dbcore.CatalogTables:
 		return `SELECT n.nspname, c.relname,
-				CASE WHEN c.relkind IN ('v', 'm') THEN 'VIEW' ELSE 'BASE TABLE' END,
+				CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'BASE TABLE' END,
 				COALESCE(obj_description(c.oid, 'pg_class'), ''),
 				CASE WHEN c.relkind IN ('r', 'p')
 					THEN CAST(GREATEST(c.reltuples, -1) AS bigint) ELSE -1 END
@@ -403,7 +412,10 @@ func (l PostgresDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj strin
 					SELECT 1 FROM pg_constraint k
 					WHERE k.conrelid = a.attrelid AND k.contype = 'p' AND a.attnum = ANY(k.conkey)
 				) THEN 1 ELSE 0 END,
-				COALESCE(col_description(a.attrelid, a.attnum), '')
+				COALESCE(col_description(a.attrelid, a.attnum), ''),
+				a.attnum,
+				CASE WHEN COALESCE(a.attidentity <> '', false) OR COALESCE(a.attgenerated <> '', false)
+					THEN 1 ELSE 0 END
 			FROM pg_attribute a
 			INNER JOIN pg_class c ON c.oid = a.attrelid
 			INNER JOIN pg_namespace n ON n.oid = c.relnamespace
