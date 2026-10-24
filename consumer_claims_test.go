@@ -88,7 +88,7 @@ var claims = []consumerClaim{
 	{
 		name: "polydb",
 		dir:  "polydb/go",
-		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + SQLite/MySQL/PG/MSSQL/Oracle 五引擎目录与 DDL + Redis KV 均接内核)",
+		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + 五引擎 Option B 原生契约化 + Redis KV 接内核 + appcore 事务注册表接 TxManager)",
 		requires: []string{
 			"github.com/dbcore/dbcore",
 			"github.com/dbcore/dbcore/mysql",
@@ -98,12 +98,15 @@ var claims = []consumerClaim{
 			"github.com/dbcore/dbcore/redis",
 			"github.com/polydb/polydb/pkg/dbcore/bridge",
 		},
-		// 只有这些包的 import 列表会被检查 (见 dbcoreImportDirs)。四引擎的目录/
-		// DDL 经 NewFromDB 委托内核驱动, Redis 经 KVDriver 委托 (P1-5, 含 D5
-		// 续扫/结构化 RESP/流条目三个内核增值接口)；执行/事务/表浏览分页仍是
-		// polydb 自有实现 (见 polydb AGENTS.md 的边界声明)。
+		requiresSymbols: []string{"dbc.SQLTxDriver", "bridge.NewTxManager"},
+		// 只有这些包的 import 列表会被检查 (见 dbcoreImportDirs)。Option B
+		// (2026-10-24) 后五个 SQL 引擎的 *Conn 原生实现 dbc.SQLTxDriver (执行/
+		// 事务/目录/DDL/浏览全委托内核驱动)，Redis 经 KVDriver 委托 (P1-5, 含
+		// D5 续扫/结构化 RESP/流条目三个内核增值接口)；appcore 的事务注册表接
+		// TxManager (经 ProtocolDriver.SQLTx 暴露的原生驱动)。protocol 面的表
+		// 浏览分页仍是 polydb 自有实现 (见 polydb AGENTS.md 的边界声明)。
 		dbcoreImportDirs: []string{
-			"pkg/dbcore/bridge", "pkg/dbsqlite",
+			"pkg/appcore", "pkg/dbcore/bridge", "pkg/dbsqlite",
 			"pkg/dbmysql", "pkg/dbpostgres", "pkg/dbmssql", "pkg/dboracle",
 			"pkg/dbredis",
 		},

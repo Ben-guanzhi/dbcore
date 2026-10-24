@@ -251,6 +251,60 @@ func (h Harness) Run(t *testing.T) {
 			t.Fatalf("idle tx not reclaimed by sweep")
 		}
 	})
+
+	t.Run("tx_rollback_all_on_teardown", func(t *testing.T) {
+		tm := dbcore.NewTxManager(drv)
+		defer tm.Close()
+		info, err := tm.Begin(ctx, dbcore.TxMode{})
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if _, err := tm.ExecuteInTx(ctx, info.ID,
+			fmt.Sprintf("INSERT INTO %s(id,name) VALUES (%s,%s)", name, q(1), q(2)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 9}, dbcore.Value{Kind: dbcore.ValText, S: "doomed"},
+		); err != nil {
+			t.Fatalf("execute in tx: %v", err)
+		}
+		// A teardown (connection disconnect) rolls back every live transaction.
+		tm.RollbackAll()
+		if _, err := tm.Info(info.ID); err == nil {
+			t.Fatalf("tx survived RollbackAll")
+		}
+		// The rolled-back insert must not be visible; a fresh statement uses a
+		// new auto-commit path, proving the registry entry is really gone.
+		res, err := drv.Execute(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 9})
+		if err != nil {
+			t.Fatalf("count after rollback: %v", err)
+		}
+		if counted := countRows(res); counted != 0 {
+			t.Fatalf("rolled-back row still visible: count = %d", counted)
+		}
+	})
+}
+
+// countRows extracts the first integer cell of a single-row result (COUNT(*)).
+func countRows(res *dbcore.QueryResult) int64 {
+	if len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return -1
+	}
+	v := res.Rows[0][0]
+	switch v.Kind {
+	case dbcore.ValInt:
+		return v.I
+	case dbcore.ValFloat:
+		return int64(v.F)
+	case dbcore.ValText:
+		n := 0
+		for _, r := range v.S {
+			if r < '0' || r > '9' {
+				return -1
+			}
+			n = n*10 + int(r-'0')
+		}
+		return int64(n)
+	}
+	return -1
 }
 
 // IsNotFound reports whether err is the transaction-not-found sentinel.

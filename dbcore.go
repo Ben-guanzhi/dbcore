@@ -365,6 +365,25 @@ func (m *TxManager) SetMaxEntries(n int) {
 // SweepNow forces an immediate idle/capacity sweep (useful for tests and manual GC).
 func (m *TxManager) SweepNow() { m.sweepIdleTx() }
 
+// RollbackAll rolls back and removes every transaction (used when the owning
+// connection is torn down). Entries are removed under the lock; the rollback
+// I/O runs outside it, matching Commit/Rollback's discipline.
+func (m *TxManager) RollbackAll() {
+	m.mu.Lock()
+	var txs []*sql.Tx
+	for id, e := range m.txs {
+		if e.tx != nil {
+			txs = append(txs, e.tx)
+		}
+		delete(m.txs, id)
+	}
+	m.mu.Unlock()
+
+	for _, tx := range txs {
+		_ = tx.Rollback()
+	}
+}
+
 func (m *TxManager) sweeper() {
 	m.mu.Lock()
 	interval := m.idleTTL / 6
