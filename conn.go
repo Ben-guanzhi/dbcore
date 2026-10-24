@@ -32,9 +32,9 @@ type ConnSpec struct {
 	Kind DatabaseKind
 
 	// Network endpoint (ignored by SQLite).
-	Host string
-	Port int
-	User string
+	Host     string
+	Port     int
+	User     string
 	Password string
 	// Database is the database to select. For MySQL it doubles as the catalog
 	// schema; for PostgreSQL it is the connecting database.

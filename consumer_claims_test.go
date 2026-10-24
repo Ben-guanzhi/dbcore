@@ -60,7 +60,7 @@ var claims = []consumerClaim{
 	{
 		name: "fynequery",
 		dir:  "fynequery",
-		doc:  "WORKSPACE.md §2 fynequery 行 (冻结: 目录/索引/KV 只读消费, Session/DML/连接不再迁入内核 — INTEGRATION-PLAN P1-6)",
+		doc:  "WORKSPACE.md §2 fynequery 行 (冻结: 目录/索引/KV 只读消费 + 插件协议经内核 plugindriver; Session/DML/连接不再迁入内核 — INTEGRATION-PLAN P1-6)",
 		requires: []string{
 			"github.com/dbcore/dbcore",
 			"github.com/dbcore/dbcore/sqltext",
@@ -69,12 +69,16 @@ var claims = []consumerClaim{
 			"github.com/dbcore/dbcore/mssql",
 			"github.com/dbcore/dbcore/oracle",
 			"github.com/dbcore/dbcore/redis",
+			"github.com/dbcore/dbcore/plugindriver",
 		},
 		// fynequery 的接入深度已定格 (P1-6 裁定, 对应 DECISION §2.5 "冻结为组件参考"):
 		// 目录/索引经内核驱动只读消费, Redis 经 KVDriver, 方言字符串走 sqltext。
+		// 插件协议 (NDJSON + banner) 已上游化进内核 plugindriver: fynequery 的
+		// proto 是内核协议的类型别名视图, 线上 cell 用带标签结构体 (NULL 与空串
+		// 不再同形)。
 		// Session.Query/DML/连接生命周期不再迁入内核 —— 出现下列任一符号即说明
 		// 冻结被打破, 请先更新 DECISION 再动代码。
-		requiresSymbols: []string{"dbcore.IndexInfo"},
+		requiresSymbols: []string{"dbcore.IndexInfo", "plugindriver.ProtocolName"},
 		forbids: []string{
 			"dbcore.Open(",      // 连接生命周期迁内核的标志
 			"dbcore.PoolConfig", // 连接池迁内核的标志
