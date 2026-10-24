@@ -129,6 +129,22 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 		}, "", "")
 	case plugindriver.MethodBrowseCount:
 		send(uint64(7), "", "")
+	case "stream":
+		// Three frames: columns first, rows next, counters in the terminal
+		// (Done) one — the shape Driver.CallStream walks.
+		frame := func(f plugindriver.StreamFrame, done bool) {
+			payload, _ := json.Marshal(f)
+			resp := plugindriver.Response{ID: req.ID, Result: payload, Done: done}
+			raw, _ := json.Marshal(resp)
+			fmt.Fprintf(out, "%s\n", raw)
+			out.Flush()
+		}
+		frame(plugindriver.StreamFrame{Columns: []plugindriver.ColumnPayload{{Name: "n", Type: "INTEGER"}}}, false)
+		frame(plugindriver.StreamFrame{Rows: [][]plugindriver.CellPayload{{{Kind: "int", Int: 1}}, {{Kind: "int", Int: 2}}}}, false)
+		frame(plugindriver.StreamFrame{Rows: [][]plugindriver.CellPayload{{{Kind: "int", Int: 3}}}}, false)
+		// The terminal frame carries the aggregate counters only; its rows
+		// field stays empty by convention.
+		frame(plugindriver.StreamFrame{RowsAffected: 3, DurationMS: 1}, true)
 	default:
 		send(nil, "unknown method "+req.Method, dbcore.ErrCodeNotSupported)
 	}
@@ -370,5 +386,62 @@ func TestPluginDriverHonoursContext(t *testing.T) {
 	cancel()
 	if _, err := drv.ListSchemas(ctx); err == nil {
 		t.Fatal("a cancelled context must fail the call")
+	}
+}
+
+// Call is the raw round trip a wider-session client (fynequery's host) uses
+// for its own vocabulary; CallStream walks the multi-frame replies. Both go
+// through the connection-oriented shape, so the test drives StartConn — one
+// process, one Open, the Bind view — exactly the way the UI host consumes it.
+func TestCallRawAndStreamThroughConnDriver(t *testing.T) {
+	binary := buildFakePlugin(t)
+	ctx := context.Background()
+
+	conn, err := plugindriver.StartConn(ctx, binary, nil)
+	if err != nil {
+		t.Fatalf("start conn: %v", err)
+	}
+	defer conn.Close()
+
+	// Raw single-shot call in the plugin's own vocabulary.
+	var pong string
+	if err := conn.Call(ctx, plugindriver.MethodPing, nil, &pong); err != nil {
+		t.Fatalf("call ping: %v", err)
+	}
+	if pong != "pong" {
+		t.Fatalf("ping = %q", pong)
+	}
+
+	// Streaming: every frame in order, then the terminal aggregate.
+	frames := 0
+	var rows []int64
+	var final struct {
+		RowsAffected int64 `json:"rowsAffected"`
+	}
+	err = conn.CallStream(ctx, "stream", nil, func(f plugindriver.StreamFrame) (bool, error) {
+		frames++
+		if frames == 1 && (len(f.Columns) != 1 || f.Columns[0].Name != "n") {
+			t.Fatalf("first frame = %+v", f)
+		}
+		for _, row := range f.Rows {
+			if len(row) == 1 {
+				rows = append(rows, row[0].Int)
+			}
+		}
+		return true, nil
+	}, &final)
+	if err != nil {
+		t.Fatalf("call stream: %v", err)
+	}
+	if frames != 3 || len(rows) != 3 || rows[2] != 3 {
+		t.Fatalf("frames = %d rows = %v", frames, rows)
+	}
+	if final.RowsAffected != 3 {
+		t.Fatalf("terminal aggregate = %+v", final)
+	}
+
+	// Bind still hands out the kernel's SQLDriver view of a connection.
+	if bound := conn.Bind("any", "db"); bound == nil {
+		t.Fatal("bind returned no driver view")
 	}
 }

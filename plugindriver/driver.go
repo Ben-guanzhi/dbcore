@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/dbcore/dbcore"
 )
@@ -28,9 +29,12 @@ type Driver struct {
 
 	// writeMu serializes frames: a Response must not be interleaved mid-line.
 	writeMu sync.Mutex
-	// pending maps a request id to the channel waiting for its reply.
+	// mu guards pending and streams.
 	mu      sync.Mutex
 	pending map[int64]chan Response
+	// streams maps a streaming request id to its channel; its frames arrive
+	// one by one until the terminal (Done) one retires it.
+	streams map[int64]chan Response
 	nextID  atomic.Int64
 
 	// kind is what the plugin's banner declared.
@@ -46,7 +50,20 @@ type Driver struct {
 // a compatible banner is killed immediately: the alternative is a host that sends
 // requests into a process speaking something else.
 func Start(ctx context.Context, path string, args []string) (*Driver, error) {
-	cmd := exec.CommandContext(ctx, path, args...)
+	return StartWithOpts(ctx, path, args, StartOpts{})
+}
+
+// StartWithOpts is Start with launch options: a stderr sink, a hidden window,
+// and a banner timeout. A plugin that does not banner in time is killed — a
+// silent executable must fail the launch, not hang it.
+func StartWithOpts(ctx context.Context, path string, args []string, opts StartOpts) (*Driver, error) {
+	cmd := exec.Command(path, args...)
+	if opts.Stderr != nil {
+		cmd.Stderr = opts.Stderr
+	}
+	if opts.HideWindow {
+		hideWindow(cmd)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("plugindriver: stdin: %w", err)
@@ -55,8 +72,6 @@ func Start(ctx context.Context, path string, args []string) (*Driver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("plugindriver: stdout: %w", err)
 	}
-	// The plugin's stderr stays the plugin's: it is diagnostic output, and the host
-	// never parses it.
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("plugindriver: start %s: %w", path, err)
 	}
@@ -66,9 +81,10 @@ func Start(ctx context.Context, path string, args []string) (*Driver, error) {
 		stdin:   stdin,
 		stdout:  bufio.NewReaderSize(stdout, 1<<20),
 		pending: make(map[int64]chan Response),
+		streams: make(map[int64]chan Response),
 	}
 
-	banner, err := d.readBanner()
+	banner, err := d.readBanner(opts.bannerTimeout())
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -93,7 +109,12 @@ func Start(ctx context.Context, path string, args []string) (*Driver, error) {
 // StartConn launches a plugin for the connection-oriented host: one process
 // serving several connections.
 func StartConn(ctx context.Context, path string, args []string) (*ConnDriver, error) {
-	drv, err := Start(ctx, path, args)
+	return StartConnWithOpts(ctx, path, args, StartOpts{})
+}
+
+// StartConnWithOpts is StartConn with launch options (see StartOpts).
+func StartConnWithOpts(ctx context.Context, path string, args []string, opts StartOpts) (*ConnDriver, error) {
+	drv, err := StartWithOpts(ctx, path, args, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -114,14 +135,30 @@ func acceptsProtocol(name string) bool {
 }
 
 // readBanner reads the single line a plugin prints before the protocol starts.
-func (d *Driver) readBanner() (Banner, error) {
-	line, err := d.stdout.ReadBytes('\n')
-	if err != nil {
-		return Banner{}, fmt.Errorf("plugindriver: read banner: %w", err)
+// A plugin that never banners fails the launch after the timeout.
+func (d *Driver) readBanner(timeout time.Duration) (Banner, error) {
+	type read struct {
+		line []byte
+		err  error
+	}
+	ch := make(chan read, 1)
+	go func() {
+		line, err := d.stdout.ReadBytes('\n')
+		ch <- read{line, err}
+	}()
+	var raw []byte
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return Banner{}, fmt.Errorf("plugindriver: read banner: %w", r.err)
+		}
+		raw = r.line
+	case <-time.After(timeout):
+		return Banner{}, fmt.Errorf("plugindriver: no banner after %s", timeout)
 	}
 	var banner Banner
-	if err := json.Unmarshal(line, &banner); err != nil {
-		return Banner{}, fmt.Errorf("plugindriver: banner is not JSON (%q): %w", string(line), err)
+	if err := json.Unmarshal(raw, &banner); err != nil {
+		return Banner{}, fmt.Errorf("plugindriver: banner is not JSON (%q): %w", string(raw), err)
 	}
 	// The engine is named either way: the kernel's banner says "kind", the
 	// fynequery one says "code". A plugin written for either client is accepted.
@@ -130,14 +167,16 @@ func (d *Driver) readBanner() (Banner, error) {
 		kind = banner.Code
 	}
 	if kind == "" {
-		return Banner{}, fmt.Errorf("plugindriver: the banner does not name an engine: %q", string(line))
+		return Banner{}, fmt.Errorf("plugindriver: the banner does not name an engine: %q", string(raw))
 	}
 	banner.Kind = kind
 	banner.Code = kind
 	return banner, nil
 }
 
-// readLoop dispatches replies to the call that is waiting for each id.
+// readLoop dispatches replies to the call that is waiting for each id. A
+// streaming reply arrives as several frames under one id; each is forwarded
+// until the terminal (Done) frame retires it.
 func (d *Driver) readLoop() {
 	for {
 		line, err := d.stdout.ReadBytes('\n')
@@ -148,6 +187,16 @@ func (d *Driver) readLoop() {
 				return
 			}
 			d.mu.Lock()
+			if sc, ok := d.streams[resp.ID]; ok {
+				// Streaming frame: keep the channel open until the terminal
+				// (Done) frame, then retire it.
+				if resp.Done {
+					delete(d.streams, resp.ID)
+				}
+				d.mu.Unlock()
+				sc <- resp
+				continue
+			}
 			ch, ok := d.pending[resp.ID]
 			delete(d.pending, resp.ID)
 			d.mu.Unlock()
@@ -167,15 +216,21 @@ func (d *Driver) readLoop() {
 	}
 }
 
-// failAll fails every waiting call: once the pipe is gone, nothing can answer them.
+// failAll fails every waiting call — single-shot and streaming alike: once the
+// pipe is gone, nothing can answer them.
 func (d *Driver) failAll(err error) {
 	d.mu.Lock()
 	d.readErr = err
 	waiting := d.pending
 	d.pending = make(map[int64]chan Response)
+	streaming := d.streams
+	d.streams = make(map[int64]chan Response)
 	d.mu.Unlock()
 	for _, ch := range waiting {
 		ch <- Response{Error: err.Error()}
+	}
+	for _, ch := range streaming {
+		ch <- Response{Error: err.Error(), Done: true}
 	}
 }
 
@@ -254,7 +309,12 @@ func (d *Driver) Close() error {
 	_ = d.stdin.Close()
 	d.mu.Lock()
 	d.pending = make(map[int64]chan Response)
+	streaming := d.streams
+	d.streams = make(map[int64]chan Response)
 	d.mu.Unlock()
+	for _, ch := range streaming {
+		ch <- Response{Error: "plugindriver: shut down", Done: true}
+	}
 	if d.cmd.Process != nil {
 		_ = d.cmd.Process.Kill()
 	}

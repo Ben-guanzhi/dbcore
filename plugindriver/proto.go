@@ -161,6 +161,16 @@ type ResultPayload struct {
 	LastInsertID int64           `json:"lastInsertId"`
 }
 
+// StreamFrame is one frame of a streaming reply (see Driver.CallStream). The
+// first frame carries the column metadata; the terminal frame — the one the
+// reply marks Done — carries the aggregate counters as well.
+type StreamFrame struct {
+	Columns      []ColumnPayload `json:"columns,omitempty"`
+	Rows         [][]CellPayload `json:"rows,omitempty"`
+	RowsAffected int64           `json:"rowsAffected,omitempty"`
+	DurationMS   int64           `json:"durationMs"`
+}
+
 // TablePayload is dbcore.TableInfo on the wire.
 type TablePayload struct {
 	Schema     string `json:"schema"`

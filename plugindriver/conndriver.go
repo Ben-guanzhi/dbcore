@@ -81,6 +81,26 @@ func (d *ConnDriver) ConnIDs() []string {
 // Kind reports the engine the plugin implements.
 func (d *ConnDriver) Kind() dbcore.DatabaseKind { return d.proc.kind }
 
+// Call reaches the process for a single-shot method the kernel has no view of
+// — transactions, DML batches, metrics, meta — with the connection id inside
+// the params. A client with a wider session surface (fynequery's) keeps its
+// vocabulary while the process plumbing stays here.
+func (d *ConnDriver) Call(ctx context.Context, method string, params, result interface{}) error {
+	return d.proc.Call(ctx, method, params, result)
+}
+
+// CallStream is Call for a streaming method: frames arrive until the terminal
+// (Done) one, each handed to onFrame; a false return stops early.
+func (d *ConnDriver) CallStream(
+	ctx context.Context,
+	method string,
+	params interface{},
+	onFrame func(StreamFrame) (bool, error),
+	final interface{},
+) error {
+	return d.proc.CallStream(ctx, method, params, onFrame, final)
+}
+
 // Ping asks the plugin whether it is alive. A plugin that predates the method
 // answers "unknown method", which is reported as ErrNotSupported.
 func (d *ConnDriver) Ping(ctx context.Context) error {
@@ -163,13 +183,17 @@ func isUnknownMethod(err error) bool {
 // Conn is one connection of a plugin, bound so the dbcore.SQLDriver methods do
 // not have to name it every time.
 type Conn struct {
-	driver *ConnDriver
-	connID string
+	driver   *ConnDriver
+	connID   string
+	database string
 }
 
-// Bind returns the dbcore.SQLDriver view of one connection.
-func (d *ConnDriver) Bind(connID string) dbcore.SQLDriver {
-	return &Conn{driver: d, connID: connID}
+// Bind returns the dbcore.SQLDriver view of one connection. database is the name
+// the host associates with this connection (the SQLite file, the selected
+// database, …); it becomes the single schema the connection reports, because a
+// connection-oriented plugin is already bound to exactly one database.
+func (d *ConnDriver) Bind(connID, database string) dbcore.SQLDriver {
+	return &Conn{driver: d, connID: connID, database: database}
 }
 
 func (c *Conn) Kind() dbcore.DatabaseKind { return c.driver.Kind() }
@@ -208,10 +232,12 @@ func (c *Conn) ExecuteIn(exec dbcore.SQLTx, ctx context.Context, query string, a
 }
 
 func (c *Conn) ListSchemas(ctx context.Context) ([]dbcore.SchemaInfo, error) {
-	// The connection-oriented protocol has no schema list: a fynequery plugin
-	// lists databases through its own call. Answering with what the connection
-	// knows is honest, where a wrong answer would not be.
-	return []dbcore.SchemaInfo{{Name: ""}}, nil
+	// The connection-oriented protocol opens the database at connect time, so the
+	// connection is already bound to one database. The kernel's catalog path asks
+	// for a schema list to populate the navigator; answering with the database this
+	// connection holds is honest, where a harder-wired empty name would leave the
+	// navigator blank and break the schema-scoped table/column lookups that follow.
+	return []dbcore.SchemaInfo{{Name: c.database}}, nil
 }
 
 func (c *Conn) ListTables(ctx context.Context, schema string) ([]dbcore.TableInfo, error) {
