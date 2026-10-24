@@ -134,7 +134,7 @@ func TestHostReadsStringCellsFromAnOlderPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	conn := host.Bind(connID)
+	conn := host.Bind(connID, "legacy")
 
 	result, err := conn.Execute(context.Background(), "SELECT id, note")
 	if err != nil {

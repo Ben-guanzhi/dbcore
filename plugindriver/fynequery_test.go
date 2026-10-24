@@ -89,7 +89,7 @@ func TestConnHostDrivesAFynequeryPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	conn := host.Bind(connID)
+	conn := host.Bind(connID, "cross")
 
 	// The plugin's own methods, reached through the kernel's connection-oriented
 	// method set.
