@@ -346,6 +346,7 @@ func (d *OracleDriver) BrowseRows(ctx context.Context, schema, table string, req
 	cq, ca := d.dialect.BuildCountQuery(s, table, req)
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
 		out.Total = uint64(cres.Rows[0][0].I)
+		out.TotalFound = true
 	}
 	return out, nil
 }
@@ -395,6 +396,7 @@ func (l OracleDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRow
 	b.WriteString("SELECT * FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))
 	args := l.appendWhere(&b, req)
+	args = append(args, dbcore.AppendKeyset(&b, l, req, len(args) > 0)...)
 	dbcore.AppendSortLimit(&b, l, req)
 	return b.String(), args
 }

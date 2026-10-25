@@ -631,3 +631,122 @@ func formatReply(v any) string {
 		return fmt.Sprint(x)
 	}
 }
+
+// KeyPageReader implementation: windowed reads for large collection keys.
+// Everything below holds the same read lock as GetValue so a concurrent
+// SelectDB cannot swap the client mid-read.
+
+func (d *RedisDriver) ListRange(ctx context.Context, key string, start, stop int64) ([]string, int64, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	c := d.client
+	length, err := c.LLen(ctx, key).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	items, err := c.LRange(ctx, key, start, stop).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	return items, length, nil
+}
+
+func (d *RedisDriver) HashPage(ctx context.Context, key string, cursor uint64, count int64) ([]dbcore.RedisField, uint64, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	raw, next, err := d.client.HScan(ctx, key, cursor, "", count).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	fields := make([]dbcore.RedisField, 0, len(raw)/2)
+	// HSCAN returns field/value pairs flattened; a count is a hint and the
+	// walk is per-bucket, so a trailing odd element means a partial write.
+	for i := 0; i+1 < len(raw); i += 2 {
+		fields = append(fields, dbcore.RedisField{Name: raw[i], Value: raw[i+1]})
+	}
+	return fields, next, nil
+}
+
+func (d *RedisDriver) SetPage(ctx context.Context, key string, cursor uint64, count int64) ([]string, uint64, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	members, next, err := d.client.SScan(ctx, key, cursor, "", count).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	sort.Strings(members)
+	return members, next, nil
+}
+
+func (d *RedisDriver) ZSetRange(ctx context.Context, key string, start, stop int64) ([]string, []float64, int64, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	c := d.client
+	length, err := c.ZCard(ctx, key).Result()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	zs, err := c.ZRangeWithScores(ctx, key, start, stop).Result()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	members := make([]string, 0, len(zs))
+	scores := make([]float64, 0, len(zs))
+	for _, z := range zs {
+		members = append(members, fmt.Sprint(z.Member))
+		scores = append(scores, z.Score)
+	}
+	return members, scores, length, nil
+}
+
+func (d *RedisDriver) StreamRange(ctx context.Context, key, afterID string, count int64) ([]dbcore.RedisStreamEntry, int64, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	c := d.client
+	length, err := c.XLen(ctx, key).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	start := afterID
+	if start == "" {
+		start = "-"
+	} else {
+		// XRANGE's start is inclusive; the "(" prefix (Redis 6.2+) excludes
+		// afterID itself. Servers that do not understand the prefix report a
+		// syntax error, which the fallback below handles by reading one extra
+		// entry and dropping it.
+		msgs, perr := c.XRangeN(ctx, key, "("+start, "+", count).Result()
+		if perr == nil {
+			return streamEntries(msgs), length, nil
+		}
+	}
+	// The +1 read is only for the afterID trim; from the start, count is exact.
+	fetch := count + 1
+	if afterID == "" {
+		fetch = count
+	}
+	msgs, err := c.XRangeN(ctx, key, start, "+", fetch).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+	if afterID != "" && len(msgs) > 0 && msgs[0].ID == afterID {
+		msgs = msgs[1:]
+	}
+	return streamEntries(msgs), length, nil
+}
+
+func streamEntries(msgs []goredis.XMessage) []dbcore.RedisStreamEntry {
+	out := make([]dbcore.RedisStreamEntry, 0, len(msgs))
+	for _, m := range msgs {
+		entry := dbcore.RedisStreamEntry{ID: m.ID}
+		for k, val := range m.Values {
+			entry.Fields = append(entry.Fields, dbcore.RedisField{Name: k, Value: fmt.Sprint(val)})
+		}
+		sort.Slice(entry.Fields, func(i, j int) bool { return entry.Fields[i].Name < entry.Fields[j].Name })
+		out = append(out, entry)
+	}
+	return out
+}
+
+// Compile-time assertion: the redis driver serves large keys in windows.
+var _ dbcore.KeyPageReader = (*RedisDriver)(nil)

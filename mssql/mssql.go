@@ -313,6 +313,7 @@ func (d *MSSQLDriver) BrowseRows(ctx context.Context, schema, table string, req 
 	cq, ca := d.dialect.BuildCountQuery(schema, table, req)
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
 		out.Total = uint64(cres.Rows[0][0].I)
+		out.TotalFound = true
 	}
 	return out, nil
 }

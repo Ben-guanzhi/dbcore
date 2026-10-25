@@ -51,6 +51,13 @@ type ConnSpec struct {
 	Params map[string]string
 	// ConnectTimeout bounds the initial dial (0 = engine default).
 	ConnectTimeout time.Duration
+	// ReadTimeout / WriteTimeout bound how long a single connection may sit
+	// on one read or write (0 = engine default). MySQL wires them into the
+	// DSN; engines without a per-connection knob (PG, MSSQL, Oracle) honor
+	// the caller's context instead, so the fields are accepted-and-documented
+	// there rather than silently dropped.
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 	// Dialer overrides the TCP transport, e.g. to route through an in-process
 	// SSH tunnel. Engines that cannot honour it return ErrNotSupported.
 	Dialer Dialer

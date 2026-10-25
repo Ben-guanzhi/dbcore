@@ -153,3 +153,32 @@ func AsDatabaseCreator(d Driver) (DatabaseCreator, bool) {
 	w, ok := d.(DatabaseCreator)
 	return w, ok
 }
+
+// KeyPageReader is the optional capability for reading large collection keys
+// in windows instead of whole (HGETALL / SMEMBERS / LRANGE 0 -1 on a
+// million-member key would end every client). List and zset page by rank with
+// the collection length for the pager; hash and set page by SCAN cursor, the
+// only way Redis offers them. Optional in the ElementWriter style: consumers
+// assert with AsKeyPageReader and fall back to full reads.
+type KeyPageReader interface {
+	// ListRange reads list items [start, stop] (Redis semantics, -1 = end)
+	// plus LLEN, so the UI can size its pager.
+	ListRange(ctx context.Context, key string, start, stop int64) (items []string, length int64, err error)
+	// HashPage reads one HSCAN step. cursor 0 starts the walk; the returned
+	// cursor is passed back until it comes back 0.
+	HashPage(ctx context.Context, key string, cursor uint64, count int64) (fields []RedisField, next uint64, err error)
+	// SetPage reads one SSCAN step.
+	SetPage(ctx context.Context, key string, cursor uint64, count int64) (members []string, next uint64, err error)
+	// ZSetRange reads zset members by rank with their scores, plus ZCARD.
+	ZSetRange(ctx context.Context, key string, start, stop int64) (members []string, scores []float64, length int64, err error)
+	// StreamRange reads up to count entries strictly after afterID ("" = from
+	// the start), plus XLEN, so a stream browser can continue where it left
+	// off instead of only ever seeing the first hundred entries.
+	StreamRange(ctx context.Context, key, afterID string, count int64) (entries []RedisStreamEntry, length int64, err error)
+}
+
+// AsKeyPageReader is the assertion helper matching the AsSQLTx family.
+func AsKeyPageReader(d Driver) (KeyPageReader, bool) {
+	p, ok := d.(KeyPageReader)
+	return p, ok
+}

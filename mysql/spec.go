@@ -48,6 +48,8 @@ func DSN(spec dbcore.ConnSpec) string {
 	cfg.DBName = spec.Database
 	cfg.ParseTime = true
 	cfg.Timeout = spec.ConnectTimeout
+	cfg.ReadTimeout = spec.ReadTimeout
+	cfg.WriteTimeout = spec.WriteTimeout
 	if tls := tlsParam(spec.SSLMode); tls != "" {
 		cfg.TLSConfig = tls
 	}

@@ -175,6 +175,30 @@ func isIdentChar(c byte) bool {
 		(c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
+// AppendKeyset appends the keyset continuation predicate (single sort key:
+// k > v with a dialect placeholder) and returns the bound args. Multi-key
+// sorts degrade to OFFSET silently-but-safely: the page is still correct,
+// just not seek-fast. whereWritten tells it whether the statement already has
+// a WHERE (filters), so the predicate joins with AND.
+func AppendKeyset(b *strings.Builder, d Dialect, req *TableRowsRequest, whereWritten bool) []Value {
+	if len(req.After) == 0 || len(req.Sort) != 1 || len(req.After) != 1 {
+		return nil
+	}
+	if whereWritten {
+		b.WriteString(" AND ")
+	} else {
+		b.WriteString(" WHERE ")
+	}
+	b.WriteString(d.QuoteIdent(req.Sort[0].Column))
+	if req.Sort[0].Desc {
+		b.WriteString(" < ")
+	} else {
+		b.WriteString(" > ")
+	}
+	b.WriteString(d.Placeholder(1))
+	return []Value{req.After[0]}
+}
+
 // AppendSortLimit appends ORDER BY / LIMIT / OFFSET clauses to b using the dialect.
 // Shared by every driver so paging syntax lives in exactly one place (contract §4.5).
 func AppendSortLimit(b *strings.Builder, d Dialect, req *TableRowsRequest) {
@@ -191,7 +215,7 @@ func AppendSortLimit(b *strings.Builder, d Dialect, req *TableRowsRequest) {
 		}
 	}
 	limit, offset := req.PageSize, 0
-	if req.Page > 1 {
+	if req.Page > 1 && len(req.After) == 0 {
 		offset = (req.Page - 1) * req.PageSize
 	}
 	if clause := d.LimitOffset(limit, offset); clause != "" {

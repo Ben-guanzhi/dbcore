@@ -134,12 +134,21 @@ type TableRowsRequest struct {
 	PageSize int
 	Sort     []SortKey
 	Filter   []FilterExpr
+	// After turns paging into keyset continuation: values aligned with Sort.
+	// Exactly one sort key is supported (the guarded deep-paging case);
+	// anything else degrades to OFFSET. When set, Page/offset are ignored.
+	After []Value
 }
 
 type TableRowsResult struct {
 	Columns []ColumnInfo
 	Rows    [][]Value
 	Total   uint64
+	// TotalFound reports whether Total was actually read. Without it a failed
+	// COUNT (permissions, cancelled context) is indistinguishable from an
+	// empty table, and the client's pager would say "0 rows" about a table it
+	// is holding rows of.
+	TotalFound bool
 }
 
 // QueryResult is the generic result of Execute.
