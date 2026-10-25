@@ -1,6 +1,9 @@
 package dbcore
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValueForColumnParsesOracleNumber(t *testing.T) {
 	if got := valueForColumn("42", "NUMBER"); got.Kind != ValInt || got.I != 42 {
@@ -52,6 +55,32 @@ func TestValueForColumnNormalizesText(t *testing.T) {
 		}
 		if c.kind == ValText && got.S != c.text {
 			t.Errorf("valueForColumn(%v, %q).S = %q, want %q", c.in, c.typ, got.S, c.text)
+		}
+	}
+}
+
+func TestValueOf(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	cases := []struct {
+		in   any
+		want Value
+	}{
+		{nil, Value{Kind: ValNull}},
+		{int64(7), Value{Kind: ValInt, I: 7}},
+		{float64(1.5), Value{Kind: ValFloat, F: 1.5}},
+		{float32(2.5), Value{Kind: ValFloat, F: 2.5}},
+		{"s", Value{Kind: ValText, S: "s"}},
+		{[]byte("b"), Value{Kind: ValBlob, B: []byte("b")}},
+		{true, Value{Kind: ValBool, Bool: true}},
+		{now, Value{Kind: ValTime, T: now}},
+		{int(3), Value{Kind: ValText, S: "3"}}, // non-scalar degrades to %v text
+	}
+	for _, c := range cases {
+		got := ValueOf(c.in)
+		if got.Kind != c.want.Kind || got.I != c.want.I || got.F != c.want.F ||
+			got.S != c.want.S || got.Bool != c.want.Bool || !got.T.Equal(c.want.T) ||
+			string(got.B) != string(c.want.B) {
+			t.Errorf("ValueOf(%#v) = %+v, want %+v", c.in, got, c.want)
 		}
 	}
 }

@@ -115,6 +115,24 @@ func RowLimit(dbType, query string, limit int) string {
 // is client-level policy, and the root client builds pages inline around its
 // own ORDER BY handling. The raw window renderers stay with the clients.
 
+// Placeholder renders the idx-th (1-based) bind parameter the way the engine's
+// own driver expects: "?" for MySQL/SQLite, "$n" for PostgreSQL, "@pn" for
+// SQL Server, ":n" for Oracle. Values must ride as bind arguments alongside
+// the statement (contract P0-4); this spells only the marker. Unknown engines
+// get "?", the database/sql default.
+func Placeholder(dbType string, idx int) string {
+	switch Normalize(dbType) {
+	case Postgres:
+		return fmt.Sprintf("$%d", idx)
+	case SQLServer:
+		return fmt.Sprintf("@p%d", idx)
+	case Oracle:
+		return fmt.Sprintf(":%d", idx)
+	default:
+		return "?"
+	}
+}
+
 // TruncateStatement empties a table. SQLite has no TRUNCATE; deleting every
 // row is what its own CLI does, and it keeps the sqlite_sequence counter
 // alone. `quotedTable` must already carry the engine's quoting — the caller

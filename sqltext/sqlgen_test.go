@@ -314,3 +314,26 @@ func TestColumnTypeSeekKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestPlaceholder(t *testing.T) {
+	cases := []struct {
+		dbType string
+		idx    int
+		want   string
+	}{
+		{"mysql", 1, "?"},
+		{"mariadb", 3, "?"}, // alias resolves to the mysql dialect
+		{"sqlite", 2, "?"},
+		{"postgres", 1, "$1"},
+		{"pg", 4, "$4"},
+		{"mssql", 1, "@p1"},
+		{"sqlserver", 2, "@p2"},
+		{"oracle", 1, ":1"},
+		{"unknown-engine", 5, "?"}, // database/sql default
+	}
+	for _, c := range cases {
+		if got := Placeholder(c.dbType, c.idx); got != c.want {
+			t.Errorf("Placeholder(%q, %d) = %q, want %q", c.dbType, c.idx, got, c.want)
+		}
+	}
+}

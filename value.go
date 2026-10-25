@@ -96,6 +96,14 @@ func TryGetTime(v Value) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// ValueOf converts a native Go scalar (nil / int64 / float64 / string / []byte /
+// bool / time.Time) into a Value, the boundary helper for callers whose data
+// starts as Go values rather than scanned rows. Anything else degrades to its
+// %v text, mirroring what a text cast would store.
+func ValueOf(v any) Value {
+	return nativeToValue(v)
+}
+
 // nativeFromValue converts a Value to the driver-native argument type.
 func nativeFromValue(v Value) any {
 	switch v.Kind {
