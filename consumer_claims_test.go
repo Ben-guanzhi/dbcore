@@ -111,6 +111,38 @@ var claims = []consumerClaim{
 			"pkg/dbredis",
 		},
 	},
+	{
+		name: "sqltui-main",
+		dir:  "sqltui-main",
+		doc:  "WORKSPACE.md §2 sqltui-main 行 (TUI 场景线: 连接/执行/目录/方言/KV 经内核; MSSQL 跨库目录与文件 loader 留在客户端)",
+		requires: []string{
+			"github.com/dbcore/dbcore",
+			"github.com/dbcore/dbcore/sqltext",
+			"github.com/dbcore/dbcore/mysql",
+			"github.com/dbcore/dbcore/postgres",
+			"github.com/dbcore/dbcore/mssql",
+			"github.com/dbcore/dbcore/oracle",
+			"github.com/dbcore/dbcore/sqlite",
+			"github.com/dbcore/dbcore/redis",
+		},
+		// 2026-10-25 接入: 五个 SQL 引擎经 internal/db/core 适配器消费内核
+		// (Open/Execute/ListXxx/sqltext 引用与限行), Redis 经 KVDriver
+		// (ScanKeysEnriched/ExecCommandTyped/GetValue)。MSSQL 的跨库目录
+		// (sys.databases / [db].dbo.[table]) 与 reader/ 文件 loader 留在
+		// 客户端——内核尚无跨库目录能力, 文件 loader 按决策不进内核。
+		// 事务 (TxManager) 与宽会话 (SessionCore) 不接入: TUI 用户手打
+		// BEGIN/COMMIT, 不需要注册表式事务。
+		requiresSymbols: []string{"dbcore.SQLDriver", "dbcore.Open(", "sqltext.QuoteIdent"},
+		forbids: []string{
+			"dbcore.TxManager",   // 事务管理迁内核的标志 (未接入)
+			"dbcore.SessionCore", // 宽会话实现是内核驱动内部细节, 消费者不得引用
+		},
+		dbcoreImportDirs: []string{
+			"internal/db/core", "internal/db/mysqlbe", "internal/db/postgresbe",
+			"internal/db/sqlserverbe", "internal/db/oraclebe", "internal/db/sqlitebe",
+			"internal/db/redisbe",
+		},
+	},
 }
 
 func TestConsumersKeepTheIntegrationTheyClaim(t *testing.T) {
