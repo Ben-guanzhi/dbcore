@@ -78,16 +78,101 @@ func rowsToResult(rows *sql.Rows) (*QueryResult, error) {
 
 // IsReadQuery reports whether a statement is expected to return rows. Exported so
 // drivers can decide between QueryContext and ExecContext uniformly.
+//
+// Beyond the read-keyword prefixes, INSERT/UPDATE/DELETE ... RETURNING
+// (PostgreSQL, SQLite >= 3.35, MariaDB) also produces a result set that a plain
+// Exec would silently discard, so those route to the query path too.
 func IsReadQuery(s string) bool {
 	t := strings.TrimSpace(s)
 	t = strings.TrimLeft(t, "(")
 	upper := strings.ToUpper(t)
-	for _, p := range []string{"SELECT", "WITH", "PRAGMA", "SHOW", "EXPLAIN", "VALUES", "TABLE"} {
+	for _, p := range []string{"SELECT", "WITH", "PRAGMA", "SHOW", "EXPLAIN", "VALUES", "TABLE", "DESC", "DESCRIBE"} {
 		if strings.HasPrefix(upper, p) {
 			return true
 		}
 	}
+	return HasReturningClause(t)
+}
+
+// HasReturningClause reports whether the statement contains a RETURNING
+// clause. Such a statement produces a result set that a plain Exec would
+// silently discard.
+//
+// The scan skips string literals, quoted identifiers, and comments, so a value
+// like UPDATE t SET note = 'returning' is not misrouted to the query path
+// (which then fails on a statement that returns nothing). Only a whole word
+// outside any quoted region counts as a clause.
+func HasReturningClause(sql string) bool {
+	var quote byte // active quote character; 0 outside a quoted region
+	i := 0
+	for i < len(sql) {
+		c := sql[i]
+		if quote != 0 {
+			end := quote // brackets close on a different character
+			if quote == '[' {
+				end = ']'
+			}
+			switch {
+			case c == end && i+1 < len(sql) && sql[i+1] == end:
+				i += 2 // doubled quote escapes a single literal quote
+				continue
+			case c == end:
+				quote = 0
+				i++
+			case quote == '\'' && c == '\\' && i+1 < len(sql):
+				i += 2 // backslash escape, MySQL default
+			default:
+				i++
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"', '`', '[':
+			quote = c
+			i++
+		case '-':
+			if i+1 < len(sql) && sql[i+1] == '-' {
+				if nl := strings.IndexByte(sql[i:], '\n'); nl >= 0 {
+					i += nl + 1
+				} else {
+					i = len(sql)
+				}
+				continue
+			}
+			i++
+		case '/':
+			if i+1 < len(sql) && sql[i+1] == '*' {
+				if end := strings.Index(sql[i:], "*/"); end >= 0 {
+					i += end + 2
+				} else {
+					i = len(sql)
+				}
+				continue
+			}
+			i++
+		default:
+			if isIdentChar(c) {
+				start := i
+				for i < len(sql) && isIdentChar(sql[i]) {
+					i++
+				}
+				if strings.EqualFold(sql[start:i], "returning") {
+					return true
+				}
+			} else {
+				i++
+			}
+		}
+	}
 	return false
+}
+
+// isIdentChar reports whether c may occur inside a SQL word. ASCII only: the
+// RETURNING keyword is ASCII, so a non-ASCII run can never match and is stepped
+// over one byte at a time.
+func isIdentChar(c byte) bool {
+	return c == '_' || c == '$' ||
+		(c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 // AppendSortLimit appends ORDER BY / LIMIT / OFFSET clauses to b using the dialect.
