@@ -48,26 +48,25 @@ type ForeignKey struct {
 // constraints), one CREATE INDEX per secondary index, and one ALTER TABLE per
 // foreign key.
 //
+// statements := one CREATE TABLE (columns plus primary-key constraint), one
+// CREATE INDEX per secondary index, and one ALTER TABLE per foreign key.
+//
 // FullTypes optionally overrides a column's reported type with the fuller
 // spelling a separate query produced (engines such as MSSQL and Oracle report
 // bare names through their column list, which would build invalid DDL).
+//
+// The sibling file alter.go carries the matching verbs for a table that already
+// exists (ADD/DROP COLUMN, ALTER COLUMN, index and constraint changes); use
+// those when synchronizing and this one when reconstructing.
 func CreateTable(dbType, schema, table string, columns []Column, fullTypes map[string]string, indexes []Index, foreignKeys []ForeignKey) string {
 	object := tableName(dbType, schema, table)
 
 	definitions := make([]string, 0, len(columns)+1)
 	for _, column := range columns {
-		dataType := column.Type
 		if full, ok := fullTypes[column.Name]; ok && full != "" {
-			dataType = full
+			column.Type = full
 		}
-		line := "  " + ident(dbType, column.Name) + " " + dataType
-		if value := strings.TrimSpace(column.DefaultValue); value != "" {
-			line += " DEFAULT " + NormalizeDefault(dbType, value)
-		}
-		if !column.Nullable {
-			line += " NOT NULL"
-		}
-		definitions = append(definitions, line)
+		definitions = append(definitions, "  "+columnDef(dbType, column))
 	}
 
 	statements := []string{}
@@ -93,16 +92,8 @@ func CreateTable(dbType, schema, table string, columns []Column, fullTypes map[s
 	}
 
 	for _, fk := range foreignKeys {
-		referenced := tableName(dbType, fk.RefSchema, fk.RefTable)
-		line := fmt.Sprintf("ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)",
-			object, ident(dbType, fk.Name), columnsList(dbType, fk.Columns), referenced, columnsList(dbType, fk.RefColumns))
-		if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
-			line += " ON DELETE " + fk.OnDelete
-		}
-		if fk.OnUpdate != "" && fk.OnUpdate != "NO ACTION" {
-			line += " ON UPDATE " + fk.OnUpdate
-		}
-		statements = append(statements, line+";")
+		statements = append(statements,
+			"ALTER TABLE "+object+" "+foreignKeyClause(dbType, fk)+";")
 	}
 
 	return strings.Join(statements, "\n\n")
