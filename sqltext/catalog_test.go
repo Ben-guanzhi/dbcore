@@ -86,6 +86,27 @@ func TestIndexesQueryAnswersIsUniqueNotNonUnique(t *testing.T) {
 // The two shapes this guard exists to refuse, written out so the checks above
 // are seen to have teeth: a server is not needed to show that a four-column
 // statement fails the scan and that NON_UNIQUE names the opposite flag.
+// db_ 前缀的 9 个系统角色必须按精确名单排除，而不是 NOT LIKE 'db[_]%'——
+// 否则 db_admin 这类用户 schema 会被误藏（2026-10-25 修复）。
+func TestSchemasQueryExcludesSystemRolesByNameNotPrefix(t *testing.T) {
+	q, err := SchemasQuery(SQLServer, "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, "db[_]") {
+		t.Errorf("SchemasQuery 不应再用前缀过滤 db_ schema:\n%s", q)
+	}
+	for _, role := range []string{
+		"db_owner", "db_accessadmin", "db_securityadmin", "db_ddladmin",
+		"db_backupoperator", "db_datareader", "db_datawriter",
+		"db_denydatareader", "db_denydatawriter",
+	} {
+		if !strings.Contains(q, "'"+role+"'") {
+			t.Errorf("SchemasQuery 缺系统角色 %s 的精确排除:\n%s", role, q)
+		}
+	}
+}
+
 func TestTheIndexShapeGuardRefusesTheShapesItGuardsAgainst(t *testing.T) {
 	old := `SELECT INDEX_NAME, INDEX_TYPE, NON_UNIQUE, COLUMN_NAME
 		FROM information_schema.STATISTICS

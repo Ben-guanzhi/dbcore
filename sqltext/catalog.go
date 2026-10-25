@@ -44,6 +44,8 @@ func DatabasesQuery(dbType string) (string, error) {
 }
 
 // SchemasQuery returns the catalog statement that lists every schema.
+// 系统内置对象按精确名单排除：db_ 前缀的 9 个固定数据库角色逐个点名，而不是
+// NOT LIKE 'db[_]%'——否则 db_admin 这类以 db_ 开头的用户 schema 会被误藏。
 func SchemasQuery(dbType, database string) (string, error) {
 	switch dbType {
 	case SQLServer:
@@ -52,7 +54,10 @@ func SchemasQuery(dbType, database string) (string, error) {
 			return "", err
 		}
 		return fmt.Sprintf(`SELECT s.name FROM %s.sys.schemas s
-			WHERE s.name NOT LIKE 'db[_]%%' AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest')
+			WHERE s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest',
+				'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
+				'db_backupoperator', 'db_datareader', 'db_datawriter',
+				'db_denydatareader', 'db_denydatawriter')
 			ORDER BY s.name`, name), nil
 	case Postgres:
 		return `SELECT nspname FROM pg_namespace
