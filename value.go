@@ -158,6 +158,9 @@ var textColumnTypes = map[string]bool{
 	"CHAR": true, "VARCHAR": true, "TINYTEXT": true, "TEXT": true,
 	"MEDIUMTEXT": true, "LONGTEXT": true, "NCHAR": true, "NVARCHAR": true,
 	"NTEXT": true, "ENUM": true, "SET": true, "JSON": true,
+	// Exact numerics scanned as bytes by go-sql-driver (contract §6.6 showed
+	// DECIMAL arriving as []byte); text keeps the digits readable everywhere.
+	"DECIMAL": true, "NUMERIC": true,
 	"CITEXT": true, "NAME": true, "UUID": true,
 	"VARCHAR2": true, "NVARCHAR2": true, "CLOB": true, "NCLOB": true, "LONG": true,
 }

@@ -84,3 +84,21 @@ func TestValueOf(t *testing.T) {
 		}
 	}
 }
+
+// MySQL's driver scans exact numerics (DECIMAL/NUMERIC) as []byte; without the
+// text-type mapping they surface as "<blob N bytes>" in every consumer grid.
+func TestValueForColumnDecimalIsText(t *testing.T) {
+	v := valueForColumn([]byte("123.45"), "DECIMAL")
+	if v.Kind != ValText || v.S != "123.45" {
+		t.Fatalf("got %v, want text 123.45", v)
+	}
+	v = valueForColumn([]byte("10"), "NUMERIC")
+	if v.Kind != ValText || v.S != "10" {
+		t.Fatalf("got %v, want text 10", v)
+	}
+	// A real blob stays a blob.
+	v = valueForColumn([]byte{0x00, 0x01}, "BLOB")
+	if v.Kind != ValBlob {
+		t.Fatalf("blob degraded to %v", v.Kind)
+	}
+}

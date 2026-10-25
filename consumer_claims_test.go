@@ -143,6 +143,35 @@ var claims = []consumerClaim{
 			"internal/db/redisbe",
 		},
 	},
+	{
+		name: "db-dev",
+		dir:  "db-dev",
+		doc:  "WORKSPACE.md §2 db-dev 行 (2026-10-25 破例解冻: 仅 DSN 拼装收敛到内核 dbcoreX.DSN; 连接生命周期/应用级池/SSH/自定义 TLS 配置留客户端)",
+		requires: []string{
+			"github.com/dbcore/dbcore",
+			"github.com/dbcore/dbcore/mysql",
+			"github.com/dbcore/dbcore/postgres",
+			"github.com/dbcore/dbcore/mssql",
+			"github.com/dbcore/dbcore/sqlite",
+		},
+		// 2026-10-25: db-dev (已归档, 只收安全/崩溃修复) 经用户裁定破例解冻, 仅把
+		// "连接串拼装"这一处重复收敛到内核: 四个引擎的 DSN 改由 dbcoreX.DSN(ConnSpec)
+		// 生成 (internal/db/kernelconn.go 的 Connection.ConnSpec + 各驱动 DSN 委托)。
+		// 未迁入内核的边界 (出现即说明解冻被扩大, 请先更新 DECISION 再动代码):
+		//   - 连接生命周期: DBHandle 需要 *sql.DB, 而 dbcore.Driver 不暴露底层 *sql.DB,
+		//     故沿用"内核 DSN + 自有 sql.Open"(与 TableProGo/fynequery 同模式), 不走 dbcore.Open。
+		//   - 应用级连接池 (引用计数/LRU/doomed)、SSH 隧道、MySQL 自定义 TLS 配置注册均留客户端。
+		requiresSymbols: []string{"dbcore.ConnSpec", "dbcore.KindMySQL", "dbcoremysql.DSN("},
+		forbids: []string{
+			"dbcore.Open(",      // 连接生命周期迁内核的标志 (未迁: 需要 *sql.DB)
+			"dbcore.PoolConfig", // 连接池旋钮迁内核的标志 (未迁: 应用级池留客户端)
+			"dbcore.TxManager",  // 事务迁内核的标志 (未迁)
+		},
+		dbcoreImportDirs: []string{
+			"internal/db", "internal/db/drivers/postgres",
+			"internal/db/drivers/sqlite", "internal/db/drivers/sqlserver",
+		},
+	},
 }
 
 func TestConsumersKeepTheIntegrationTheyClaim(t *testing.T) {

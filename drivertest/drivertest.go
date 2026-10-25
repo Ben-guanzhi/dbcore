@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dbcore/dbcore"
+	"github.com/dbcore/dbcore/dberror"
 )
 
 // Harness drives one engine driver through the full contract.
@@ -152,6 +153,51 @@ func (h Harness) Run(t *testing.T) {
 		nm, ok := dbcore.TryGetString(res.Rows[0][1])
 		if !ok || nm != "hello" {
 			t.Fatalf("name round-trip = %q (%v), want hello", nm, ok)
+		}
+	})
+
+	t.Run("error_unique_violation", func(t *testing.T) {
+		// A driver error must be classifiable without string-matching the
+		// dialect in the client: the second insert into the (unique) catalog
+		// column has to surface as dberror.UniqueViolation. The main table
+		// has no unique constraint, so this one carries its own.
+		uni := fmt.Sprintf("dbcore_ct_err_%d", rand.Int63())
+		if h.TableName != nil {
+			uni = h.TableName(uni)
+		}
+		drop := "DROP TABLE IF EXISTS " + uni
+		if h.DropTable != nil {
+			drop = h.DropTable(uni)
+		}
+		if _, err := drv.Execute(ctx, drop); err != nil {
+			t.Fatalf("drop: %v", err)
+		}
+		create := fmt.Sprintf("CREATE TABLE %s(id INTEGER PRIMARY KEY, tag TEXT UNIQUE NOT NULL)", uni)
+		if h.CreateTable != nil {
+			create = h.CreateTable(uni)
+		}
+		if _, err := drv.Execute(ctx, create); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		defer drv.Execute(ctx, drop)
+
+		if _, err := drv.Execute(ctx,
+			fmt.Sprintf("INSERT INTO %s(id,tag) VALUES (%s,%s)", uni, q(7), q(8)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 7},
+			dbcore.Value{Kind: dbcore.ValText, S: "dup"},
+		); err != nil {
+			t.Fatalf("first insert: %v", err)
+		}
+		_, err := drv.Execute(ctx,
+			fmt.Sprintf("INSERT INTO %s(id,tag) VALUES (%s,%s)", uni, q(8), q(8)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 8},
+			dbcore.Value{Kind: dbcore.ValText, S: "dup"},
+		)
+		if err == nil {
+			t.Fatal("second insert should violate the unique constraint")
+		}
+		if got := dberror.Classify(err); got != dberror.UniqueViolation {
+			t.Fatalf("class = %s (%v), want unique_violation", got, err)
 		}
 	})
 

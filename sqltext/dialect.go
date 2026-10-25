@@ -127,7 +127,7 @@ func rowLimitLimit(query string, limit int) string {
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return query
 	}
-	if ownLimitRe.MatchString(trimmed) {
+	if queryOwnLimit(trimmed) {
 		return query
 	}
 	return fmt.Sprintf("%s LIMIT %d", trimmed, limit)
@@ -142,7 +142,7 @@ func rowLimitSQLServer(query string, limit int) string {
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return query
 	}
-	if ownLimitRe.MatchString(trimmed) {
+	if queryOwnLimit(trimmed) {
 		return query
 	}
 	if !strings.HasPrefix(upper, "SELECT") {
@@ -160,7 +160,7 @@ func rowLimitOracle(query string, limit int) string {
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return query
 	}
-	if ownLimitRe.MatchString(trimmed) {
+	if queryOwnLimit(trimmed) {
 		return query
 	}
 	return fmt.Sprintf("SELECT * FROM (%s) WHERE ROWNUM <= %d", trimmed, limit)

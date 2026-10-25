@@ -98,6 +98,59 @@ func QuotedLiteral(dbType, value string) string {
 // means the statement runs untouched, which is the safer direction.
 var ownLimitRe = regexp.MustCompile(`(?i)\b(top|limit|offset|fetch|rownum)\b`)
 
+// queryOwnLimit reports whether the statement already caps its own rows. The
+// regex runs on the statement with string literals, quoted identifiers,
+// brackets and comments removed first: a column named `limit` or a literal
+// like 'top n' must not suppress the row cap and turn a bounded page into a
+// full-table read.
+func queryOwnLimit(query string) bool {
+	var sb strings.Builder
+	i := 0
+	for i < len(query) {
+		c := query[i]
+		switch {
+		case c == '\'' || c == '"' || c == '`':
+			i++
+			for i < len(query) {
+				if c == '\'' && query[i] == '\\' && i+1 < len(query) {
+					i += 2
+					continue
+				}
+				if query[i] == c {
+					if i+1 < len(query) && query[i+1] == c {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case c == '[':
+			i++
+			for i < len(query) && query[i] != ']' {
+				i++
+			}
+			i++
+		case c == '-' && i+1 < len(query) && query[i+1] == '-':
+			for i < len(query) && query[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(query) && query[i+1] == '*':
+			end := strings.Index(query[i+2:], "*/")
+			if end < 0 {
+				i = len(query)
+			} else {
+				i += 2 + end + 2
+			}
+		default:
+			sb.WriteByte(c)
+			i++
+		}
+	}
+	return ownLimitRe.MatchString(sb.String())
+}
+
 // RowLimit caps a plain SELECT — or a WITH ... SELECT CTE — the way GUI
 // clients do: TOP for SQL Server, LIMIT for MySQL/PostgreSQL/SQLite, a ROWNUM
 // wrapper for Oracle. Statements with their own cap, and anything that is not
