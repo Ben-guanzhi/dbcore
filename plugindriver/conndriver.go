@@ -30,6 +30,11 @@ type ConnDriver struct {
 type connState struct {
 	id     string
 	server string
+	// inTx mirrors the manual transaction this connection holds. The plugin is
+	// the source of truth for BEGIN/COMMIT/ROLLBACK; the mirror lets a caller
+	// ask without a round trip, and lets a transaction left open on disconnect
+	// be rolled back.
+	inTx bool
 }
 
 // NewConnDriver returns a driver over an already-started plugin process.
@@ -147,6 +152,19 @@ const (
 	connMethodColumns = "columns"
 	connMethodQuery   = "query"
 	connMethodBrowse  = "browse"
+	// The wide session: what a session does beyond running statements. These
+	// are the names the deployed (fynequery) plugins answer; the kernel's own
+	// spelling is the fallback on the right.
+	connMethodBegin       = "begin"
+	connMethodCommit      = "commit"
+	connMethodRollback    = "rollback"
+	connMethodUpdate      = "update"
+	connMethodInsert      = "insert"
+	connMethodDelete      = "delete"
+	connMethodApplyBatch  = "applyBatch"
+	connMethodQueryStream = "queryStream"
+	connMethodMetrics     = "metrics"
+	connMethodCreateDB    = "createDatabase"
 )
 
 // connFallbacks maps a fynequery method name onto the kernel's equivalent, used
@@ -158,6 +176,17 @@ var connFallbacks = map[string]string{
 	connMethodColumns: MethodListConnColumns,
 	connMethodQuery:   MethodConnQuery,
 	connMethodBrowse:  MethodConnBrowse,
+
+	connMethodBegin:       MethodConnBegin,
+	connMethodCommit:      MethodConnCommit,
+	connMethodRollback:    MethodConnRollback,
+	connMethodUpdate:      MethodConnUpdate,
+	connMethodInsert:      MethodConnInsert,
+	connMethodDelete:      MethodConnDelete,
+	connMethodApplyBatch:  MethodConnApplyBatch,
+	connMethodQueryStream: MethodConnQueryStream,
+	connMethodMetrics:     MethodConnMetrics,
+	connMethodCreateDB:    MethodConnCreateDB,
 }
 
 // callConn sends one connection-oriented call, trying the fynequery name first and
@@ -180,6 +209,44 @@ func isUnknownMethod(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "unknown method")
 }
 
+// callStreamConn is callConn for a streaming method: the fynequery name goes
+// first, the kernel's when the plugin does not know it. The retry is only safe
+// before any frame reaches the caller, which is where it happens — a plugin
+// answers an unknown method with an error rather than a first frame.
+func (d *ConnDriver) callStreamConn(
+	ctx context.Context,
+	method string,
+	params interface{},
+	onFrame func(StreamFrame) (bool, error),
+	final interface{},
+) error {
+	err := d.CallStream(ctx, method, params, onFrame, final)
+	if err == nil {
+		return nil
+	}
+	fallback, ok := connFallbacks[method]
+	if !ok || !isUnknownMethod(err) {
+		return err
+	}
+	return d.CallStream(ctx, fallback, params, onFrame, final)
+}
+
+// setInTx records the mirrored transaction state of one connection.
+func (d *ConnDriver) setInTx(connID string, value bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	state := d.conns[connID]
+	state.inTx = value
+	d.conns[connID] = state
+}
+
+// inTxOf reports the mirrored transaction state of one connection.
+func (d *ConnDriver) inTxOf(connID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.conns[connID].inTx
+}
+
 // Conn is one connection of a plugin, bound so the dbcore.SQLDriver methods do
 // not have to name it every time.
 type Conn struct {
@@ -193,6 +260,15 @@ type Conn struct {
 // database, …); it becomes the single schema the connection reports, because a
 // connection-oriented plugin is already bound to exactly one database.
 func (d *ConnDriver) Bind(connID, database string) dbcore.SQLDriver {
+	return d.Wide(connID, database)
+}
+
+// Wide returns the wide session view of one connection: the same driver Bind
+// hands out, with the transaction / DML / metrics / streaming calls typed as
+// well (see connsession.go). Bind widens to dbcore.SQLDriver because that is the
+// narrow contract every consumer needs; a client that also drives the session
+// asks for this one instead of re-spelling the protocol over raw Call.
+func (d *ConnDriver) Wide(connID, database string) *Conn {
 	return &Conn{driver: d, connID: connID, database: database}
 }
 

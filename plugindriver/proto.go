@@ -135,7 +135,17 @@ type ColumnPayload struct {
 	Default      *string `json:"default,omitempty"`
 	IsPrimaryKey bool    `json:"isPrimaryKey,omitempty"`
 	Comment      string  `json:"comment,omitempty"`
+	// Key is the fynequery spelling of the primary-key marker ("PK"), which
+	// arrives on the streaming path: a plugin written for fynequery names the
+	// column's key where a plugin written for the kernel sets isPrimaryKey.
+	// Both are accepted, so either plugin marks its primary keys on either host
+	// (see isPrimaryColumn).
+	Key string `json:"key,omitempty"`
 }
+
+// isPrimaryColumn reports whether a column payload marks a primary key, in
+// either spelling.
+func isPrimaryColumn(c ColumnPayload) bool { return c.IsPrimaryKey || c.Key == "PK" }
 
 // CellPayload is one dbcore.Value on the wire.
 //
