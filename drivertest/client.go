@@ -80,6 +80,7 @@ func Run(t *testing.T, spec Spec) {
 		DropTable:   drop,
 		TableName:   tableName,
 		ColumnFold:  func(s string) string { return FoldName(spec.Kind, s) },
+		Kind:        spec.Kind,
 	}.Run(t)
 }
 

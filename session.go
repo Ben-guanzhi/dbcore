@@ -182,3 +182,70 @@ func AsKeyPageReader(d Driver) (KeyPageReader, bool) {
 	p, ok := d.(KeyPageReader)
 	return p, ok
 }
+
+// AsElementWriter, AsElementDeleter, AsRowAppender, AsKeyAdmin, AsKeyScanner
+// and AsTypedCommander assert the single-key capabilities defined in
+// dbcore.go. The helpers exist so a consumer never type-asserts the driver
+// type directly (the plugin driver and the built-in driver can both serve).
+func AsElementWriter(d Driver) (ElementWriter, bool) {
+	w, ok := d.(ElementWriter)
+	return w, ok
+}
+
+func AsElementDeleter(d Driver) (ElementDeleter, bool) {
+	w, ok := d.(ElementDeleter)
+	return w, ok
+}
+
+func AsRowAppender(d Driver) (RowAppender, bool) {
+	w, ok := d.(RowAppender)
+	return w, ok
+}
+
+func AsKeyAdmin(d Driver) (KeyAdmin, bool) {
+	w, ok := d.(KeyAdmin)
+	return w, ok
+}
+
+func AsKeyScanner(d Driver) (KeyScanner, bool) {
+	w, ok := d.(KeyScanner)
+	return w, ok
+}
+
+func AsTypedCommander(d Driver) (TypedCommander, bool) {
+	w, ok := d.(TypedCommander)
+	return w, ok
+}
+
+// ExtraMetadataReader is the optional capability for the catalog facts beyond
+// tables/columns/indexes/foreign keys: a view's DDL, a table's CHECK
+// constraints, and a schema's sequences and routines (functions/procedures).
+//
+// The interface is aggregate but the concepts are not universal, so each
+// method answers ErrNotSupported for an engine that has no such concept
+// (SQLite: sequences and routines; MySQL: sequences; SQLite: CHECK constraint
+// catalog). That keeps "not applicable" distinguishable from "the read failed",
+// which is what lets a client hide the section instead of showing an empty one.
+//
+// Recipes live in sqltext (objects.go); drivers only execute and map. Optional
+// in the ElementWriter/KeyPageReader style: consumers assert with
+// AsExtraMetadata and degrade when the driver predates this capability.
+type ExtraMetadataReader interface {
+	// ViewDefinition returns the DDL that recreates the view: complete CREATE
+	// VIEW text where the engine can produce it (SQLite/MSSQL) or a composed
+	// CREATE OR REPLACE VIEW ... AS <body> elsewhere.
+	ViewDefinition(ctx context.Context, schema, view string) (string, error)
+	// CheckConstraints lists one table's CHECK constraints in name order.
+	CheckConstraints(ctx context.Context, schema, table string) ([]CheckConstraintInfo, error)
+	// Sequences lists one schema's sequences in name order.
+	Sequences(ctx context.Context, schema string) ([]SequenceInfo, error)
+	// Routines lists one schema's functions and procedures in name order.
+	Routines(ctx context.Context, schema string) ([]RoutineInfo, error)
+}
+
+// AsExtraMetadata is the capability assertion helper, matching AsSQLTx and
+// friends.
+func AsExtraMetadata(d Driver) (ExtraMetadataReader, bool) {
+	x, ok := d.(ExtraMetadataReader)
+	return x, ok
+}

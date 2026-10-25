@@ -137,8 +137,12 @@ func (d *SQLiteDriver) ListColumns(ctx context.Context, schema, table string) ([
 }
 
 func (d *SQLiteDriver) ListIndexes(ctx context.Context, schema, table string) ([]dbcore.IndexInfo, error) {
-	q, a := d.dialect.CatalogQuery(dbcore.CatalogIndexes, schema, table)
-	res, err := dbcore.RunQuery(ctx, d.db, q, a)
+	// The index list and the stored CREATE INDEX text come from one query so a
+	// partial/expression index can be described without a second lookup.
+	q := `SELECT i.name, i."unique", i.origin, COALESCE(m.sql, '')
+		FROM pragma_index_list(?) i
+		LEFT JOIN sqlite_master m ON m.type = 'index' AND m.name = i.name`
+	res, err := dbcore.RunQuery(ctx, d.db, q, []dbcore.Value{{Kind: dbcore.ValText, S: table}})
 	if err != nil {
 		// pragma_index_list failing (e.g. view) is not fatal for catalog listing.
 		return nil, nil
@@ -164,17 +168,36 @@ func (d *SQLiteDriver) ListIndexes(ctx context.Context, schema, table string) ([
 			Kind:    kind,
 			Unique:  r[1].I != 0,
 			Primary: origin == "pk",
+			Method:  "btree", // SQLite builds B-tree indexes only
 		}
-		// pragmas cannot be joined; index_info answers the column list per index.
-		cols, cerr := dbcore.RunQuery(ctx, d.db,
-			`SELECT name FROM pragma_index_info(?) ORDER BY seqno`,
+		// pragma_index_xinfo supplies the key order and DESC flags and marks an
+		// expression part with a NULL name; the expression text and a partial
+		// index's WHERE clause exist only in the CREATE INDEX statement.
+		parts, predicate, parsed := splitCreateIndex(r[3].S)
+		xi, cerr := dbcore.RunQuery(ctx, d.db,
+			`SELECT cid, name, "desc" FROM pragma_index_xinfo(?) ORDER BY seqno`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: name}})
 		if cerr == nil {
-			for _, cr := range cols.Rows {
-				if cr[0].Kind == dbcore.ValText && cr[0].S != "" {
-					idx.Columns = append(idx.Columns, cr[0].S)
+			part := 0
+			for _, xr := range xi.Rows {
+				if xr[0].I == -1 { // auxiliary rowid column, not a key part
+					continue
+				}
+				ip := dbcore.IndexPart{Desc: xr[2].I != 0}
+				if col := xr[1].S; col != "" {
+					ip.Column = col
+				} else if parsed && part < len(parts) {
+					ip.Expression = stripIndexDirection(parts[part])
+				}
+				part++
+				idx.Parts = append(idx.Parts, ip)
+				if ip.Column != "" {
+					idx.Columns = append(idx.Columns, ip.Column)
 				}
 			}
+		}
+		if parsed {
+			idx.Predicate = predicate
 		}
 		out = append(out, idx)
 	}

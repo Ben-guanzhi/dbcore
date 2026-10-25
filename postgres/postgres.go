@@ -159,7 +159,8 @@ func (d *PostgresDriver) ListColumns(ctx context.Context, schema, table string) 
 			Nullable:     r[2].S == "YES",
 			IsPrimaryKey: r[4].I != 0,
 			Comment:      r[5].S,
-			// r[6] = attnum (1-based), r[7] = 1/0 identity/generated flag.
+			// r[6] = attnum (1-based), r[7] = 1/0 identity, generated or
+			// serial (nextval default) flag.
 			OrdinalPosition: int32(r[6].I),
 			IsAutoIncrement: r[7].I != 0,
 		}
@@ -187,19 +188,41 @@ func (d *PostgresDriver) ListIndexes(ctx context.Context, schema, table string) 
 	for _, r := range res.Rows {
 		name := r[0].S
 		if i, ok := index[name]; ok {
-			out[i].Columns = append(out[i].Columns, r[2].S)
+			out[i].Parts = append(out[i].Parts, pgIndexPart(r))
+			if col := pgIndexPart(r).Column; col != "" {
+				out[i].Columns = append(out[i].Columns, col)
+			}
 			continue
 		}
 		index[name] = len(out)
-		out = append(out, dbcore.IndexInfo{
-			Name:    name,
-			Kind:    r[3].S,
-			Unique:  r[1].I != 0,
-			Primary: r[4].I != 0,
-			Columns: []string{r[2].S},
-		})
+		info := dbcore.IndexInfo{
+			Name:      name,
+			Kind:      r[3].S,
+			Unique:    r[1].I != 0,
+			Primary:   r[4].I != 0,
+			Method:    r[5].S,
+			Predicate: r[6].S,
+		}
+		if part := pgIndexPart(r); part.Column != "" {
+			info.Columns = []string{part.Column}
+		}
+		info.Parts = []dbcore.IndexPart{pgIndexPart(r)}
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// pgIndexPart reads one key part from a CatalogIndexes row: a plain column
+// (r[2]) or an expression rendered by pg_get_indexdef (r[7]), plus its DESC
+// flag (r[8], from pg_index.indoption).
+func pgIndexPart(r []dbcore.Value) dbcore.IndexPart {
+	part := dbcore.IndexPart{Desc: r[8].I != 0}
+	if expr := r[7].S; expr != "" {
+		part.Expression = expr
+	} else {
+		part.Column = r[2].S
+	}
+	return part
 }
 
 func (d *PostgresDriver) ListForeignKeys(ctx context.Context, schema, table string) ([]dbcore.ForeignKeyInfo, error) {
@@ -421,7 +444,9 @@ func (l PostgresDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj strin
 				) THEN 1 ELSE 0 END,
 				COALESCE(col_description(a.attrelid, a.attnum), ''),
 				a.attnum,
-				CASE WHEN COALESCE(a.attidentity <> '', false) OR COALESCE(a.attgenerated <> '', false)
+				CASE WHEN COALESCE(a.attidentity <> '', false)
+					OR COALESCE(a.attgenerated <> '', false)
+					OR COALESCE(pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%', false)
 					THEN 1 ELSE 0 END
 			FROM pg_attribute a
 			INNER JOIN pg_class c ON c.oid = a.attrelid
@@ -432,19 +457,27 @@ func (l PostgresDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj strin
 			ORDER BY a.attnum`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogIndexes:
+		// indkey pairs with indoption so a key part carries its DESC flag; an
+		// expression part has attnum 0, and pg_get_indexdef renders its text
+		// (a plain LEFT JOIN would silently drop the part instead).
 		return `SELECT i.relname,
 				CASE WHEN x.indisunique THEN 1 ELSE 0 END,
-				a.attname,
+				COALESCE(a.attname, ''),
 				CASE WHEN x.indisprimary THEN 'primary'
 					WHEN x.indisunique THEN 'unique' ELSE 'index' END,
-				CASE WHEN x.indisprimary THEN 1 ELSE 0 END
+				CASE WHEN x.indisprimary THEN 1 ELSE 0 END,
+				am.amname,
+				COALESCE(pg_get_expr(x.indpred, x.indrelid), ''),
+				CASE WHEN k.attnum = 0 THEN pg_get_indexdef(x.indexrelid, k.ord::int, true) ELSE '' END,
+				CASE WHEN (k.opt & 1) = 1 THEN 1 ELSE 0 END
 			FROM pg_index x
 			INNER JOIN pg_class i ON i.oid = x.indexrelid
 			INNER JOIN pg_class t ON t.oid = x.indrelid
 			INNER JOIN pg_namespace n ON n.oid = t.relnamespace
-			INNER JOIN LATERAL unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
-			INNER JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-			WHERE n.nspname::text = $1 AND t.relname::text = $2 AND a.attnum > 0
+			INNER JOIN pg_am am ON am.oid = i.relam
+			INNER JOIN LATERAL unnest(x.indkey, x.indoption) WITH ORDINALITY AS k(attnum, opt, ord) ON true
+			LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum AND k.attnum > 0
+			WHERE n.nspname::text = $1 AND t.relname::text = $2
 			ORDER BY i.relname, k.ord`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogForeignKeys:

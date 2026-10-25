@@ -41,6 +41,10 @@ type Harness struct {
 	// (Oracle folds to upper case); the wide-session subtests address rows by
 	// column, so they must use the stored form.
 	ColumnFold func(name string) string
+	// Kind selects the engine-specific fixture DDL for the catalog and extras
+	// subtests (indexes/FKs/views/checks/sequences/routines). When empty, the
+	// portable SQLite-shaped fixtures are used and the subtests still run.
+	Kind dbcore.DatabaseKind
 }
 
 // Run executes the contract assertions. It is safe to call from a *testing.T.
@@ -172,24 +176,21 @@ func (h Harness) Run(t *testing.T) {
 		if _, err := drv.Execute(ctx, drop); err != nil {
 			t.Fatalf("drop: %v", err)
 		}
-		create := fmt.Sprintf("CREATE TABLE %s(id INTEGER PRIMARY KEY, tag TEXT UNIQUE NOT NULL)", uni)
-		if h.CreateTable != nil {
-			create = h.CreateTable(uni)
-		}
+		create := uniqueTableDDL(h.kind(), uni)
 		if _, err := drv.Execute(ctx, create); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		defer drv.Execute(ctx, drop)
 
 		if _, err := drv.Execute(ctx,
-			fmt.Sprintf("INSERT INTO %s(id,tag) VALUES (%s,%s)", uni, q(7), q(8)),
+			fmt.Sprintf("INSERT INTO %s(id,tag) VALUES (%s,%s)", uni, q(1), q(2)),
 			dbcore.Value{Kind: dbcore.ValInt, I: 7},
 			dbcore.Value{Kind: dbcore.ValText, S: "dup"},
 		); err != nil {
 			t.Fatalf("first insert: %v", err)
 		}
 		_, err := drv.Execute(ctx,
-			fmt.Sprintf("INSERT INTO %s(id,tag) VALUES (%s,%s)", uni, q(8), q(8)),
+			fmt.Sprintf("INSERT INTO %s(id,tag) VALUES (%s,%s)", uni, q(1), q(2)),
 			dbcore.Value{Kind: dbcore.ValInt, I: 8},
 			dbcore.Value{Kind: dbcore.ValText, S: "dup"},
 		)
@@ -508,13 +509,20 @@ func (h Harness) Run(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ServerMetrics: %v", err)
 		}
-		if len(ms) == 0 {
-			t.Fatalf("ServerMetrics returned no metrics")
+		// A metrics panel is useless with one row, an empty value or an
+		// unlabelled group; the contract holds every engine to a filled row.
+		if len(ms) < 2 {
+			t.Fatalf("ServerMetrics returned %d metrics, want at least 2", len(ms))
 		}
+		seen := make(map[string]bool, len(ms))
 		for _, m := range ms {
-			if m.Label == "" {
-				t.Fatalf("metric with empty label: %+v", ms)
+			if m.Label == "" || m.Value == "" || m.Group == "" {
+				t.Errorf("incomplete metric %+v (label/value/group must all be set)", m)
 			}
+			if seen[m.Label] {
+				t.Errorf("duplicate metric label %q", m.Label)
+			}
+			seen[m.Label] = true
 		}
 	})
 
@@ -547,6 +555,13 @@ func (h Harness) Run(t *testing.T) {
 			t.Fatalf("rolled-back row still visible: count = %d", counted)
 		}
 	})
+
+	// ---- catalog detail + objects beyond tables (P3-8 / P3-4) ----
+	// These provision their own fixtures (a child table with an FK and two
+	// indexes, then a view/check table/sequence/routine), so they run after the
+	// shared table's other assertions to keep row counts predictable.
+	h.runCatalogDetailContract(t, ctx, drv, name)
+	h.runExtraMetadataContract(t, ctx, drv, name)
 }
 
 // countRows extracts the first integer cell of a single-row result (COUNT(*)).

@@ -30,6 +30,7 @@ func TestMSSQLContract(t *testing.T) {
 		},
 		Schema:      schema,
 		Placeholder: func(idx int) string { return fmt.Sprintf("@p%d", idx) },
+		Kind:        dbcore.KindMSSQL,
 		// SQL Server's TEXT is deprecated and not comparable; use NVARCHAR.
 		CreateTable: func(name string) string {
 			return fmt.Sprintf("CREATE TABLE [%s] (id INT, name NVARCHAR(255))", name)
@@ -138,7 +139,7 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 	cases := map[dbcore.CatalogKind][]string{
 		dbcore.CatalogTables:      {"MS_Description", "sys.partitions"},
 		dbcore.CatalogColumns:     {"PRIMARY KEY", "MS_Description"},
-		dbcore.CatalogIndexes:     {"is_primary_key", "'primary'"},
+		dbcore.CatalogIndexes:     {"is_primary_key", "'primary'", "filter_definition", "is_descending_key", "computed_columns"},
 		dbcore.CatalogForeignKeys: {"delete_referential_action_desc", "update_referential_action_desc"},
 	}
 	for kind, wants := range cases {

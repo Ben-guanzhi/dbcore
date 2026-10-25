@@ -182,26 +182,53 @@ func (d *MySQLDriver) ListIndexes(ctx context.Context, schema, table string) ([]
 	q, a := d.dialect.CatalogQuery(dbcore.CatalogIndexes, schema, table)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
+		// MariaDB has no information_schema.STATISTICS.EXPRESSION: retry with
+		// the shape it can answer instead of returning an empty index list.
+		res, err = dbcore.RunQuery(ctx, d.db, mysqlIndexesWithoutExpressions, a)
+	}
+	if err != nil {
 		return nil, nil
 	}
 	out := make([]dbcore.IndexInfo, 0, len(res.Rows))
 	index := make(map[string]int, len(res.Rows))
 	for _, r := range res.Rows {
 		name := r[0].S
+		part := mysqlIndexPart(r)
 		if i, ok := index[name]; ok {
-			out[i].Columns = append(out[i].Columns, r[2].S)
+			out[i].Parts = append(out[i].Parts, part)
+			if part.Column != "" {
+				out[i].Columns = append(out[i].Columns, part.Column)
+			}
 			continue
 		}
 		index[name] = len(out)
-		out = append(out, dbcore.IndexInfo{
+		info := dbcore.IndexInfo{
 			Name:    name,
 			Kind:    r[3].S,
 			Unique:  r[1].I != 0,
 			Primary: r[4].I != 0,
-			Columns: []string{r[2].S},
-		})
+			Method:  r[5].S,
+			Parts:   []dbcore.IndexPart{part},
+		}
+		if part.Column != "" {
+			info.Columns = []string{part.Column}
+		}
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// mysqlIndexPart reads one key part from a CatalogIndexes row: COLUMN_NAME, or
+// STATISTICS.EXPRESSION for a functional part (column 7), plus the DESC flag
+// (column 8, STATISTICS.COLLATION = 'D').
+func mysqlIndexPart(r []dbcore.Value) dbcore.IndexPart {
+	part := dbcore.IndexPart{Desc: r[7].I != 0}
+	if expr := r[6].S; expr != "" {
+		part.Expression = expr
+	} else {
+		part.Column = r[2].S
+	}
+	return part
 }
 
 func (d *MySQLDriver) ListForeignKeys(ctx context.Context, schema, table string) ([]dbcore.ForeignKeyInfo, error) {
@@ -290,6 +317,21 @@ func (d *MySQLDriver) BrowseRowsCount(ctx context.Context, schema, table string,
 // MySQLDialect implements dbcore.Dialect for MySQL/MariaDB.
 type MySQLDialect struct{}
 
+// mysqlIndexesWithoutExpressions is the MariaDB-safe fallback for
+// CatalogIndexes: same column shape, no EXPRESSION (MariaDB has no functional
+// index parts) and an empty expression column.
+const mysqlIndexesWithoutExpressions = `SELECT INDEX_NAME,
+	CASE WHEN NON_UNIQUE = 0 THEN 1 ELSE 0 END,
+	COALESCE(COLUMN_NAME, ''),
+	CASE WHEN INDEX_NAME = 'PRIMARY' THEN 'primary'
+		WHEN NON_UNIQUE = 0 THEN 'unique' ELSE 'index' END,
+	CASE WHEN INDEX_NAME = 'PRIMARY' THEN 1 ELSE 0 END,
+	INDEX_TYPE,
+	'',
+	CASE WHEN COLLATION = 'D' THEN 1 ELSE 0 END
+	FROM information_schema.STATISTICS
+	WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX`
+
 func (MySQLDialect) Kind() dbcore.DatabaseKind { return dbcore.KindMySQL }
 
 func (MySQLDialect) QuoteIdent(parts ...string) string {
@@ -374,12 +416,18 @@ func (l MySQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) 
 			WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogIndexes:
+		// EXPRESSION (8.0.13+) names a functional key part; the driver falls
+		// back to mysqlIndexesWithoutExpressions on MariaDB, which lacks the
+		// column. COLLATION says whether the part is DESC.
 		return `SELECT INDEX_NAME,
 			CASE WHEN NON_UNIQUE = 0 THEN 1 ELSE 0 END,
-			COLUMN_NAME,
+			COALESCE(COLUMN_NAME, ''),
 			CASE WHEN INDEX_NAME = 'PRIMARY' THEN 'primary'
 				WHEN NON_UNIQUE = 0 THEN 'unique' ELSE 'index' END,
-			CASE WHEN INDEX_NAME = 'PRIMARY' THEN 1 ELSE 0 END
+			CASE WHEN INDEX_NAME = 'PRIMARY' THEN 1 ELSE 0 END,
+			INDEX_TYPE,
+			COALESCE(EXPRESSION, ''),
+			CASE WHEN COLLATION = 'D' THEN 1 ELSE 0 END
 			FROM information_schema.STATISTICS
 			WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}

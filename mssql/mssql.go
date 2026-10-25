@@ -189,20 +189,42 @@ func (d *MSSQLDriver) ListIndexes(ctx context.Context, schema, table string) ([]
 	index := make(map[string]int, len(res.Rows))
 	for _, r := range res.Rows {
 		name := r[0].S
+		part := mssqlIndexPart(r)
 		if i, ok := index[name]; ok {
-			out[i].Columns = append(out[i].Columns, r[2].S)
+			out[i].Parts = append(out[i].Parts, part)
+			if part.Column != "" {
+				out[i].Columns = append(out[i].Columns, part.Column)
+			}
 			continue
 		}
 		index[name] = len(out)
-		out = append(out, dbcore.IndexInfo{
-			Name:    name,
-			Kind:    r[3].S,
-			Unique:  r[1].I != 0,
-			Primary: r[4].I != 0,
-			Columns: []string{r[2].S},
-		})
+		info := dbcore.IndexInfo{
+			Name:      name,
+			Kind:      r[3].S,
+			Unique:    r[1].I != 0,
+			Primary:   r[4].I != 0,
+			Method:    r[5].S,
+			Predicate: r[6].S,
+			Parts:     []dbcore.IndexPart{part},
+		}
+		if part.Column != "" {
+			info.Columns = []string{part.Column}
+		}
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// mssqlIndexPart reads one key part from a CatalogIndexes row: the column name,
+// plus the computed-column definition (r[8]) when the part is a computed column
+// — SQL Server has no expression indexes, but an index over a computed column
+// is the equivalent. r[9] is is_descending_key.
+func mssqlIndexPart(r []dbcore.Value) dbcore.IndexPart {
+	part := dbcore.IndexPart{Column: r[2].S, Desc: r[9].I != 0}
+	if r[7].I != 0 {
+		part.Expression = r[8].S
+	}
+	return part
 }
 
 func (d *MSSQLDriver) ListForeignKeys(ctx context.Context, schema, table string) ([]dbcore.ForeignKeyInfo, error) {
@@ -505,10 +527,17 @@ func (MSSQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (s
 		return `SELECT i.name, CAST(i.is_unique AS int), col.name,
 				CASE WHEN i.is_primary_key = 1 THEN 'primary'
 					WHEN i.is_unique = 1 THEN 'unique' ELSE 'index' END,
-				CAST(i.is_primary_key AS int)
+				CAST(i.is_primary_key AS int),
+				i.type_desc,
+				COALESCE(i.filter_definition, ''),
+				CASE WHEN col.is_computed = 1 THEN 1 ELSE 0 END,
+				COALESCE(cc.definition, ''),
+				CAST(ic.is_descending_key AS int)
 			FROM sys.indexes i
 			INNER JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
 			INNER JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
+			LEFT JOIN sys.computed_columns cc
+				ON cc.object_id = col.object_id AND cc.column_id = col.column_id
 			WHERE i.object_id = OBJECT_ID(QUOTENAME(@p1) + N'.' + QUOTENAME(@p2))
 				AND i.type > 0 AND i.is_hypothetical = 0 AND ic.is_included_column = 0
 			ORDER BY i.name, ic.key_ordinal`,

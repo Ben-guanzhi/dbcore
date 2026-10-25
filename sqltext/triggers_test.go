@@ -9,13 +9,13 @@ import (
 // itself (inline literal for SQL Server/Oracle, positional bind elsewhere).
 func TestTriggersQueryByEngine(t *testing.T) {
 	cases := []struct {
-		dbType      string
-		wantQuoted  string // the table literal, already in the SQL
-		wantBinds   int    // positional args expected
+		dbType     string
+		wantQuoted string // the table literal, already in the SQL
+		wantBinds  int    // positional args expected
 	}{
 		{"sqlite", "?", 1},
 		{"mysql", "?", 2},
-		{"postgresql", "?", 2},
+		{"postgresql", "$2", 2},
 		{"sqlserver", "'orders'", 0},
 		{"oracle", "'ORDERS'", 0},
 	}

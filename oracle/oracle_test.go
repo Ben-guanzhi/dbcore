@@ -26,6 +26,7 @@ func TestOracleContract(t *testing.T) {
 		},
 		Schema:      os.Getenv("DBCORE_TEST_ORACLE_SCHEMA"),
 		Placeholder: func(idx int) string { return fmt.Sprintf(":%d", idx) },
+		Kind:        dbcore.KindOracle,
 		// Oracle has no TEXT type; VARCHAR2 is the portable string column.
 		CreateTable: func(name string) string {
 			return fmt.Sprintf(`CREATE TABLE "%s" (id NUMBER, name VARCHAR2(255))`, name)
@@ -129,7 +130,7 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 	cases := map[dbcore.CatalogKind][]string{
 		dbcore.CatalogTables:      {"ALL_TAB_COMMENTS", "COMMENTS", "NUM_ROWS"},
 		dbcore.CatalogColumns:     {"ALL_COL_COMMENTS", "CONSTRAINT_TYPE = 'P'"},
-		dbcore.CatalogIndexes:     {"'primary'", "'unique'"},
+		dbcore.CatalogIndexes:     {"'primary'", "'unique'", "ALL_IND_EXPRESSIONS", "DESCEND"},
 		dbcore.CatalogForeignKeys: {"DELETE_RULE"},
 	}
 	for kind, wants := range cases {

@@ -109,6 +109,7 @@ func TestSQLiteContract(t *testing.T) {
 		},
 		Schema:      "main",
 		Placeholder: func(idx int) string { return "?" },
+		Kind:        dbcore.KindSQLite,
 	}
 	h.Run(t)
 }

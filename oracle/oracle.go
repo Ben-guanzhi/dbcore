@@ -206,20 +206,61 @@ func (d *OracleDriver) ListIndexes(ctx context.Context, schema, table string) ([
 	index := make(map[string]int, len(res.Rows))
 	for _, r := range res.Rows {
 		name := r[0].S
+		part := oracleIndexPart(r)
 		if i, ok := index[name]; ok {
-			out[i].Columns = append(out[i].Columns, r[2].S)
+			out[i].Parts = append(out[i].Parts, part)
+			if part.Column != "" {
+				out[i].Columns = append(out[i].Columns, part.Column)
+			}
 			continue
 		}
 		index[name] = len(out)
-		out = append(out, dbcore.IndexInfo{
+		info := dbcore.IndexInfo{
 			Name:    name,
 			Kind:    r[3].S,
 			Unique:  r[1].I != 0,
 			Primary: r[4].I != 0,
-			Columns: []string{r[2].S},
-		})
+			Method:  r[5].S,
+			Parts:   []dbcore.IndexPart{part},
+		}
+		if part.Column != "" {
+			info.Columns = []string{part.Column}
+		}
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// oracleIndexPart reads one key part from a CatalogIndexes row. A
+// function-based index stores a hidden SYS_NC column, so ALL_IND_EXPRESSIONS
+// (r[6]) carries the real text: a bare quoted identifier there is still a plain
+// column, anything else is the expression. r[7] is ASC/DESC.
+func oracleIndexPart(r []dbcore.Value) dbcore.IndexPart {
+	part := dbcore.IndexPart{Column: r[2].S, Desc: strings.EqualFold(r[7].S, "DESC")}
+	expr := strings.TrimSpace(r[6].S)
+	if expr == "" {
+		return part
+	}
+	if col, ok := unquoteOracleIdent(expr); ok {
+		part.Column = col
+		return part
+	}
+	part.Expression = expr
+	return part
+}
+
+// unquoteOracleIdent returns the identifier inside a bare "NAME" expression,
+// which ALL_IND_EXPRESSIONS reports for a plain column of a function-based
+// index.
+func unquoteOracleIdent(expr string) (string, bool) {
+	if len(expr) < 3 || expr[0] != '"' || expr[len(expr)-1] != '"' {
+		return "", false
+	}
+	inner := expr[1 : len(expr)-1]
+	if strings.Contains(inner, `"`) {
+		return "", false
+	}
+	return inner, true
 }
 
 func (d *OracleDriver) ListForeignKeys(ctx context.Context, schema, table string) ([]dbcore.ForeignKeyInfo, error) {
@@ -496,16 +537,25 @@ func (OracleDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (
 			ORDER BY c.COLUMN_ID`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogIndexes:
+		// ALL_IND_EXPRESSIONS is a LONG column: it must be selected bare (no
+		// COALESCE/NVL), and NULL for a plain index column. A function-based
+		// index keys a hidden SYS_NC column, so the expression is the real name.
 		return `SELECT i.INDEX_NAME,
 				CASE WHEN i.UNIQUENESS = 'UNIQUE' THEN 1 ELSE 0 END,
 				c.COLUMN_NAME,
 				CASE WHEN k.CONSTRAINT_TYPE = 'P' THEN 'primary'
 					WHEN k.CONSTRAINT_TYPE = 'U' THEN 'unique'
 					WHEN i.UNIQUENESS = 'UNIQUE' THEN 'unique' ELSE 'index' END,
-				CASE WHEN k.CONSTRAINT_TYPE = 'P' THEN 1 ELSE 0 END
+				CASE WHEN k.CONSTRAINT_TYPE = 'P' THEN 1 ELSE 0 END,
+				i.INDEX_TYPE,
+				e.COLUMN_EXPRESSION,
+				c.DESCEND
 			FROM ALL_INDEXES i
 			INNER JOIN ALL_IND_COLUMNS c
 				ON c.INDEX_OWNER = i.OWNER AND c.INDEX_NAME = i.INDEX_NAME
+			LEFT JOIN ALL_IND_EXPRESSIONS e
+				ON e.INDEX_OWNER = i.OWNER AND e.INDEX_NAME = i.INDEX_NAME
+				AND e.COLUMN_POSITION = c.COLUMN_POSITION
 			LEFT JOIN ALL_CONSTRAINTS k
 				ON k.OWNER = i.TABLE_OWNER AND k.TABLE_NAME = i.TABLE_NAME
 				AND k.INDEX_NAME = i.INDEX_NAME

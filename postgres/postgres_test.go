@@ -25,6 +25,7 @@ func TestPostgresContract(t *testing.T) {
 		},
 		Schema:      "public",
 		Placeholder: func(idx int) string { return fmt.Sprintf("$%d", idx) },
+		Kind:        dbcore.KindPostgres,
 	}
 	h.Run(t)
 }
@@ -33,8 +34,8 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 	d := PostgresDialect{}
 	cases := map[dbcore.CatalogKind][]string{
 		dbcore.CatalogTables:      {"obj_description", "reltuples"},
-		dbcore.CatalogColumns:     {"col_description", "pg_constraint"},
-		dbcore.CatalogIndexes:     {"indisprimary", "indisunique"},
+		dbcore.CatalogColumns:     {"col_description", "pg_constraint", "nextval"},
+		dbcore.CatalogIndexes:     {"indisprimary", "indisunique", "indoption", "pg_get_indexdef"},
 		dbcore.CatalogForeignKeys: {"confdeltype", "confupdtype", "unnest"},
 		dbcore.CatalogPrimaryKey:  {"contype = 'p'", "unnest"},
 	}

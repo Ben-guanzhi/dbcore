@@ -37,6 +37,7 @@ func TestMySQLContract(t *testing.T) {
 		},
 		Schema:      schema,
 		Placeholder: func(int) string { return "?" },
+		Kind:        dbcore.KindMySQL,
 	}
 	h.Run(t)
 }
@@ -127,7 +128,7 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 	cases := map[dbcore.CatalogKind][]string{
 		dbcore.CatalogTables:      {"TABLE_COMMENT", "TABLE_ROWS"},
 		dbcore.CatalogColumns:     {"COLUMN_KEY", "COLUMN_COMMENT"},
-		dbcore.CatalogIndexes:     {"'primary'", "'unique'"},
+		dbcore.CatalogIndexes:     {"'primary'", "'unique'", "EXPRESSION", "INDEX_TYPE", "COLLATION"},
 		dbcore.CatalogForeignKeys: {"REFERENTIAL_CONSTRAINTS", "DELETE_RULE", "UPDATE_RULE"},
 	}
 	for kind, wants := range cases {

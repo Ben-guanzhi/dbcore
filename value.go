@@ -205,3 +205,31 @@ func floatHoldsExactly(f float64, s string) bool {
 	got := new(big.Rat).SetFloat64(f)
 	return got != nil && got.Cmp(exact) == 0
 }
+
+// ValuesOf converts raw driver args (the []interface{} the sqltext recipes
+// return) into bound values.
+func ValuesOf(args []interface{}) []Value {
+	out := make([]Value, 0, len(args))
+	for _, a := range args {
+		out = append(out, ValueOf(a))
+	}
+	return out
+}
+
+// IntFrom reads an integral from a scanned cell, accepting the text spellings
+// some engines return for numeric columns (go-ora's NUMBER strings, MSSQL
+// variants). ok=false means the cell is not an integer at all.
+func IntFrom(v Value) (int64, bool) {
+	if n, ok := TryGetInt(v); ok {
+		return n, true
+	}
+	if v.Kind == ValFloat {
+		return int64(v.F), true
+	}
+	if v.Kind == ValText {
+		if n, err := strconv.ParseInt(strings.TrimSpace(v.S), 10, 64); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}

@@ -37,8 +37,8 @@ type ColumnInfo struct {
 	// ORDINAL_POSITION / column_id / cid+1); 0 when the engine reports none.
 	OrdinalPosition int32
 	// IsAutoIncrement reports identity/auto-increment columns (AUTO_INCREMENT,
-	// GENERATED ... AS IDENTITY, is_identity, identity_column). Serial columns
-	// created via pg_get_serial_sequence defaults are not detected.
+	// GENERATED ... AS IDENTITY, is_identity, identity_column) and PostgreSQL
+	// serial columns, whose default is nextval(...) over the column's sequence.
 	IsAutoIncrement bool
 }
 
@@ -49,13 +49,54 @@ const (
 	IndexKindIndex   = "index"
 )
 
+// IndexPart is one key part of an index: a plain column, an expression, and the
+// part's sort direction. Expression indexes (PostgreSQL/MSSQL computed columns,
+// MySQL 8 functional parts, Oracle function-based indexes, SQLite expression
+// indexes) have no column name at all, so Column stays empty and Expression
+// carries the engine's rendered expression text.
+type IndexPart struct {
+	Column     string // plain column name; empty when the part is an expression
+	Expression string // expression text; empty when the part is a plain column
+	Desc       bool   // key part is DESC (ASC when false, which is also the default)
+}
+
 type IndexInfo struct {
 	Name    string
 	Kind    string // IndexKindPrimary | IndexKindUnique | IndexKindIndex
 	Unique  bool
 	Primary bool
+	// Columns keeps the plain column names in key order, for callers that
+	// quote identifiers (DDL builders). Expression parts are not identifiers
+	// and must not be quoted, so they are absent here; read Parts for them.
 	Columns []string
+	// Method is the engine's index access method: PostgreSQL btree/hash/gin/
+	// gist/brin, MySQL BTREE/HASH/FULLTEXT/SPATIAL, SQL Server CLUSTERED/
+	// NONCLUSTERED/XML/SPATIAL, Oracle NORMAL/BITMAP/FUNCTION-BASED NORMAL.
+	// SQLite only has B-tree indexes, so it reports "btree" for every index;
+	// empty means the engine did not report one.
+	Method string
+	// Parts is the ordered key list including expressions and DESC flags. Use
+	// it when rendering an index faithfully instead of joining Columns.
+	Parts []IndexPart
+	// Predicate is the partial/filtered index predicate (PostgreSQL indpred,
+	// SQL Server filter_definition, SQLite WHERE); empty for a full index.
+	Predicate string
 }
+
+// CheckConstraintInfo is one CHECK constraint of a table: the constraint name
+// and the engine-rendered predicate. Engines normalize the text (a wrapping
+// "CHECK (...)" may or may not be included), so callers display it rather than
+// parse it.
+type CheckConstraintInfo struct {
+	Name       string
+	Expression string
+}
+
+// RoutineKind values reported by ExtraMetadataReader.Routines.
+const (
+	RoutineFunction  = "FUNCTION"
+	RoutineProcedure = "PROCEDURE"
+)
 
 // Foreign-key actions are normalized to the SQL standard spellings so callers
 // do not branch on engine catalogs (MSSQL/NULL, MySQL, SQLite all differ).
@@ -295,4 +336,22 @@ type RedisTypedReply struct {
 // raw command reply as structure instead of rendered text.
 type TypedCommander interface {
 	ExecCommandTyped(ctx context.Context, args []string) (RedisTypedReply, error)
+}
+
+// SequenceInfo is one row of ExtraMetadataReader.Sequences. Start is the
+// sequence's declared start value and Increment its step; both are 0 when the
+// engine refused to report them (PostgreSQL hides start values the current role
+// may not use). Oracle keeps no START WITH in its data dictionary, so its Start
+// is the sequence's MIN_VALUE — the same number unless the two differ.
+type SequenceInfo struct {
+	Name      string
+	Start     int64
+	Increment int64
+}
+
+// RoutineInfo is one row of ExtraMetadataReader.Routines; Kind is
+// RoutineFunction or RoutineProcedure.
+type RoutineInfo struct {
+	Name string
+	Kind string
 }
