@@ -18,6 +18,7 @@ const DriverName = "pgx"
 
 // PostgresDriver is a dbcore.SQLTxDriver backed by a *sql.DB opened with pgx.
 type PostgresDriver struct {
+	*dbcore.SessionCore
 	db      *sql.DB
 	dialect dbcore.Dialect
 	owned   bool
@@ -27,7 +28,9 @@ type PostgresDriver struct {
 // no-op so callers such as client pools keep managing the handle. The handle may
 // be opened with any database/sql driver that speaks PostgreSQL (pgx or lib/pq).
 func NewFromDB(db *sql.DB) *PostgresDriver {
-	return &PostgresDriver{db: db, dialect: &PostgresDialect{}}
+	d0 := &PostgresDriver{db: db, dialect: &PostgresDialect{}}
+	d0.initWide()
+	return d0
 }
 
 // Open connects to PostgreSQL using a pgx DSN (e.g.
@@ -41,7 +44,9 @@ func Open(dsn string) (*PostgresDriver, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &PostgresDriver{db: db, dialect: &PostgresDialect{}, owned: true}, nil
+	d0 := &PostgresDriver{db: db, dialect: &PostgresDialect{}, owned: true}
+	d0.initWide()
+	return d0, nil
 }
 
 func (d *PostgresDriver) Kind() dbcore.DatabaseKind { return dbcore.KindPostgres }

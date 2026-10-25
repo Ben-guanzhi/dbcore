@@ -36,6 +36,10 @@ type Harness struct {
 	// stored form. Oracle folds unquoted identifiers to upper case, so the
 	// catalog check must compare against the folded name.
 	TableName func(name string) string
+	// ColumnFold, when non-nil, maps a column name to the engine's stored form
+	// (Oracle folds to upper case); the wide-session subtests address rows by
+	// column, so they must use the stored form.
+	ColumnFold func(name string) string
 }
 
 // Run executes the contract assertions. It is safe to call from a *testing.T.
@@ -50,6 +54,10 @@ func (h Harness) Run(t *testing.T) {
 	defer drv.Close()
 
 	q := h.Placeholder
+	colFold := h.ColumnFold
+	if colFold == nil {
+		colFold = func(s string) string { return s }
+	}
 	name := fmt.Sprintf("dbcore_ct_%d", rand.Int63())
 	if h.TableName != nil {
 		name = h.TableName(name)
@@ -249,6 +257,218 @@ func (h Harness) Run(t *testing.T) {
 		tm.SweepNow()
 		if _, err := tm.Info(info.ID); err == nil {
 			t.Fatalf("idle tx not reclaimed by sweep")
+		}
+	})
+
+	// ---- wide session (session.go) ----
+	// Optional surface: a driver that does not implement it skips these
+	// subtests; every built-in engine implements the whole aggregate.
+
+	t.Run("wide_tx_rollback_discards", func(t *testing.T) {
+		w, ok := dbcore.AsWide(drv)
+		if !ok {
+			t.Skip("driver does not implement the wide session")
+		}
+		if w.InTransaction() {
+			t.Fatalf("fresh session reports an active transaction")
+		}
+		if err := w.BeginTx(ctx); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if !w.InTransaction() {
+			t.Fatalf("BeginTx did not mirror the state")
+		}
+		if err := w.BeginTx(ctx); err == nil {
+			t.Fatalf("second BeginTx should fail")
+		}
+		if err := w.InsertRow(ctx, name, map[string]dbcore.Value{
+			colFold("id"): {Kind: dbcore.ValInt, I: 900}, colFold("name"): {Kind: dbcore.ValText, S: "doomed"},
+		}); err != nil {
+			_ = w.RollbackTx(ctx) // do not leak the session tx to later subtests
+			t.Fatalf("insert in tx: %v", err)
+		}
+		if err := w.RollbackTx(ctx); err != nil {
+			t.Fatalf("rollback: %v", err)
+		}
+		if w.InTransaction() {
+			t.Fatalf("RollbackTx did not clear the state")
+		}
+		res, err := drv.Execute(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 900})
+		if err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if c := countRows(res); c != 0 {
+			t.Fatalf("rolled-back row still visible: count = %d", c)
+		}
+	})
+
+	t.Run("wide_row_writer_commit", func(t *testing.T) {
+		w, ok := dbcore.AsWide(drv)
+		if !ok {
+			t.Skip("driver does not implement the wide session")
+		}
+		// Missing row: UpdateRow must fail rather than silently no-op.
+		if err := w.UpdateRow(ctx, name,
+			map[string]dbcore.Value{colFold("id"): {Kind: dbcore.ValInt, I: 901}},
+			map[string]dbcore.Value{colFold("name"): {Kind: dbcore.ValText, S: "x"}}); err == nil {
+			t.Fatalf("update of a missing row should fail (affects 0 rows)")
+		}
+		if err := w.BeginTx(ctx); err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		if err := w.InsertRow(ctx, name, map[string]dbcore.Value{
+			colFold("id"): {Kind: dbcore.ValInt, I: 901}, colFold("name"): {Kind: dbcore.ValText, S: "first"},
+		}); err != nil {
+			_ = w.RollbackTx(ctx)
+			t.Fatalf("insert: %v", err)
+		}
+		if err := w.UpdateRow(ctx, name,
+			map[string]dbcore.Value{colFold("id"): {Kind: dbcore.ValInt, I: 901}},
+			map[string]dbcore.Value{colFold("name"): {Kind: dbcore.ValText, S: "second"}}); err != nil {
+			_ = w.RollbackTx(ctx)
+			t.Fatalf("update: %v", err)
+		}
+		if err := w.CommitTx(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		res, err := drv.Execute(ctx, fmt.Sprintf("SELECT name FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 901})
+		if err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if len(res.Rows) != 1 {
+			t.Fatalf("expected 1 committed row, got %d", len(res.Rows))
+		}
+		if nm, _ := dbcore.TryGetString(res.Rows[0][0]); nm != "second" {
+			t.Fatalf("committed name = %q, want second", nm)
+		}
+		if err := w.DeleteRow(ctx, name,
+			map[string]dbcore.Value{colFold("id"): {Kind: dbcore.ValInt, I: 901}}); err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+	})
+
+	t.Run("wide_batch_atomic", func(t *testing.T) {
+		w, ok := dbcore.AsWide(drv)
+		if !ok {
+			t.Skip("driver does not implement the wide session")
+		}
+		// Seed one row to update.
+		if _, err := drv.Execute(ctx,
+			fmt.Sprintf("INSERT INTO %s(id,name) VALUES (%s,%s)", name, q(1), q(2)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 910}, dbcore.Value{Kind: dbcore.ValText, S: "seed"}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		// A batch whose one statement affects zero rows must apply nothing.
+		bad := dbcore.BatchRequest{Table: name,
+			Inserts: []map[string]dbcore.Value{{colFold("id"): {Kind: dbcore.ValInt, I: 911}, colFold("name"): {Kind: dbcore.ValText, S: "n"}}},
+			Updates: []dbcore.RowChange{{
+				PK:      map[string]dbcore.Value{colFold("id"): {Kind: dbcore.ValInt, I: 999999}},
+				Changes: map[string]dbcore.Value{colFold("name"): {Kind: dbcore.ValText, S: "x"}},
+			}},
+		}
+		if err := w.ApplyBatch(ctx, bad); err == nil {
+			t.Fatalf("batch with a zero-row update should fail")
+		}
+		res, err := drv.Execute(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 911})
+		if err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if c := countRows(res); c != 0 {
+			t.Fatalf("failed batch left the insert applied: count = %d", c)
+		}
+		// A good batch: update + insert + DDL, applied atomically.
+		good := dbcore.BatchRequest{Table: name,
+			Updates: []dbcore.RowChange{{
+				PK:      map[string]dbcore.Value{colFold("id"): {Kind: dbcore.ValInt, I: 910}},
+				Changes: map[string]dbcore.Value{colFold("name"): {Kind: dbcore.ValText, S: "batched"}},
+			}},
+			Inserts: []map[string]dbcore.Value{{colFold("id"): {Kind: dbcore.ValInt, I: 911}, colFold("name"): {Kind: dbcore.ValText, S: "n"}}},
+		}
+		if err := w.ApplyBatch(ctx, good); err != nil {
+			t.Fatalf("good batch: %v", err)
+		}
+		res, err = drv.Execute(ctx, fmt.Sprintf("SELECT name FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 910})
+		if err != nil {
+			t.Fatalf("select: %v", err)
+		}
+		if nm, _ := dbcore.TryGetString(res.Rows[0][0]); nm != "batched" {
+			t.Fatalf("batched update = %q, want batched", nm)
+		}
+	})
+
+	t.Run("wide_stream_batches", func(t *testing.T) {
+		w, ok := dbcore.AsWide(drv)
+		if !ok {
+			t.Skip("driver does not implement the wide session")
+		}
+		for i := 0; i < 5; i++ {
+			if _, err := w.Execute(ctx,
+				fmt.Sprintf("INSERT INTO %s(id,name) VALUES (%s,%s)", name, q(1), q(2)),
+				dbcore.Value{Kind: dbcore.ValInt, I: 920 + int64(i)},
+				dbcore.Value{Kind: dbcore.ValText, S: "s"}); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+		}
+		batches, rows := 0, 0
+		firstColumns := 0
+		// QueryStream takes no bind args (matches the wire protocol); the
+		// whole contract table is streamed and the row count asserted as a
+		// lower bound, since earlier subtests inserted other rows too.
+		res, err := w.QueryStream(ctx, fmt.Sprintf("SELECT id, name FROM %s", name), 2,
+			func(b dbcore.StreamBatch) (bool, error) {
+				batches++
+				if batches == 1 {
+					firstColumns = len(b.Columns)
+				} else if len(b.Columns) != 0 {
+					return false, fmt.Errorf("later batch re-sent columns")
+				}
+				rows += len(b.Rows)
+				return true, nil
+			})
+		if err != nil {
+			t.Fatalf("QueryStream: %v", err)
+		}
+		if rows < 5 || batches < 3 || firstColumns != 2 {
+			t.Fatalf("stream: rows=%d batches=%d firstColumns=%d, want >=5/>=3/2", rows, batches, firstColumns)
+		}
+		if len(res.Columns) != 2 {
+			t.Fatalf("terminal columns = %d, want 2", len(res.Columns))
+		}
+		// A write statement streams as affected-row counts, no batches.
+		// QueryStream carries no bind args (matches the wire protocol), so
+		// this fixed test constant is written inline.
+		emitted := 0
+		wres, err := w.QueryStream(ctx,
+			fmt.Sprintf("INSERT INTO %s(id,name) VALUES (1, 'w')", name), 2,
+			func(dbcore.StreamBatch) (bool, error) { emitted++; return true, nil })
+		if err != nil {
+			t.Fatalf("write stream: %v", err)
+		}
+		if emitted != 0 || wres.AffectedRows != 1 {
+			t.Fatalf("write stream: emitted=%d affected=%d, want 0/1", emitted, wres.AffectedRows)
+		}
+	})
+
+	t.Run("wide_metrics", func(t *testing.T) {
+		w, ok := dbcore.AsWide(drv)
+		if !ok {
+			t.Skip("driver does not implement the wide session")
+		}
+		ms, err := w.ServerMetrics(ctx)
+		if err != nil {
+			t.Fatalf("ServerMetrics: %v", err)
+		}
+		if len(ms) == 0 {
+			t.Fatalf("ServerMetrics returned no metrics")
+		}
+		for _, m := range ms {
+			if m.Label == "" {
+				t.Fatalf("metric with empty label: %+v", ms)
+			}
 		}
 	})
 

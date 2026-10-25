@@ -23,6 +23,7 @@ const DriverName = "mysql"
 
 // MySQLDriver is a dbcore.SQLTxDriver backed by a *sql.DB opened with go-sql-driver.
 type MySQLDriver struct {
+	*dbcore.SessionCore
 	db      *sql.DB
 	dialect dbcore.Dialect
 	owned   bool
@@ -31,7 +32,9 @@ type MySQLDriver struct {
 // NewFromDB wraps an existing *sql.DB without taking ownership: Close becomes a
 // no-op so callers such as client pools keep managing the handle.
 func NewFromDB(db *sql.DB) *MySQLDriver {
-	return &MySQLDriver{db: db, dialect: &MySQLDialect{}}
+	d0 := &MySQLDriver{db: db, dialect: &MySQLDialect{}}
+	d0.initWide()
+	return d0
 }
 
 // Open connects to MySQL using a go-sql-driver DSN.
@@ -44,7 +47,9 @@ func Open(dsn string) (*MySQLDriver, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &MySQLDriver{db: db, dialect: &MySQLDialect{}, owned: true}, nil
+	d0 := &MySQLDriver{db: db, dialect: &MySQLDialect{}, owned: true}
+	d0.initWide()
+	return d0, nil
 }
 
 func (d *MySQLDriver) Kind() dbcore.DatabaseKind { return dbcore.KindMySQL }

@@ -24,6 +24,7 @@ const DriverName = "sqlserver"
 
 // MSSQLDriver is a dbcore.SQLTxDriver backed by a *sql.DB opened with go-mssqldb.
 type MSSQLDriver struct {
+	*dbcore.SessionCore
 	db      *sql.DB
 	dialect dbcore.Dialect
 	owned   bool
@@ -32,7 +33,9 @@ type MSSQLDriver struct {
 // NewFromDB wraps an existing *sql.DB without taking ownership: Close becomes a
 // no-op so callers such as client pools keep managing the handle.
 func NewFromDB(db *sql.DB) *MSSQLDriver {
-	return &MSSQLDriver{db: db, dialect: &MSSQLDialect{}}
+	d0 := &MSSQLDriver{db: db, dialect: &MSSQLDialect{}}
+	d0.initWide()
+	return d0
 }
 
 // Open connects to SQL Server using a go-mssqldb DSN.
@@ -45,7 +48,9 @@ func Open(dsn string) (*MSSQLDriver, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &MSSQLDriver{db: db, dialect: &MSSQLDialect{}, owned: true}, nil
+	d0 := &MSSQLDriver{db: db, dialect: &MSSQLDialect{}, owned: true}
+	d0.initWide()
+	return d0, nil
 }
 
 func (d *MSSQLDriver) Kind() dbcore.DatabaseKind { return dbcore.KindMSSQL }

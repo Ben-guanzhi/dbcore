@@ -36,7 +36,8 @@ func TestOracleContract(t *testing.T) {
 		},
 		// Unquoted Oracle identifiers fold to upper case; keep every reference
 		// in the harness on the stored name.
-		TableName: strings.ToUpper,
+		TableName:  strings.ToUpper,
+		ColumnFold: strings.ToUpper,
 	}
 	h.Run(t)
 }

@@ -17,6 +17,7 @@ const DriverName = "sqlite"
 
 // SQLiteDriver is a dbcore.SQLTxDriver backed by a *sql.DB opened with modernc sqlite.
 type SQLiteDriver struct {
+	*dbcore.SessionCore
 	db      *sql.DB
 	dialect dbcore.Dialect
 	owned   bool
@@ -25,7 +26,9 @@ type SQLiteDriver struct {
 // NewFromDB wraps an existing *sql.DB without taking ownership: Close becomes a
 // no-op so callers such as client pools keep managing the handle.
 func NewFromDB(db *sql.DB) *SQLiteDriver {
-	return &SQLiteDriver{db: db, dialect: &SQLiteDialect{}}
+	d0 := &SQLiteDriver{db: db, dialect: &SQLiteDialect{}}
+	d0.initWide()
+	return d0
 }
 
 // Open opens (or creates) a SQLite database at dsn (e.g. ":memory:" or a file path).
@@ -38,7 +41,9 @@ func Open(dsn string) (*SQLiteDriver, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &SQLiteDriver{db: db, dialect: &SQLiteDialect{}, owned: true}, nil
+	d0 := &SQLiteDriver{db: db, dialect: &SQLiteDialect{}, owned: true}
+	d0.initWide()
+	return d0, nil
 }
 
 func (d *SQLiteDriver) Kind() dbcore.DatabaseKind { return dbcore.KindSQLite }

@@ -24,6 +24,7 @@ const DriverName = "oracle"
 
 // OracleDriver is a dbcore.SQLTxDriver backed by a *sql.DB opened with go-ora.
 type OracleDriver struct {
+	*dbcore.SessionCore
 	db      *sql.DB
 	dialect dbcore.Dialect
 	owned   bool
@@ -32,7 +33,9 @@ type OracleDriver struct {
 // NewFromDB wraps an existing *sql.DB without taking ownership: Close becomes a
 // no-op so callers such as client pools keep managing the handle.
 func NewFromDB(db *sql.DB) *OracleDriver {
-	return &OracleDriver{db: db, dialect: &OracleDialect{}}
+	d0 := &OracleDriver{db: db, dialect: &OracleDialect{}}
+	d0.initWide()
+	return d0
 }
 
 // Open connects to Oracle using a go-ora DSN.
@@ -45,7 +48,9 @@ func Open(dsn string) (*OracleDriver, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &OracleDriver{db: db, dialect: &OracleDialect{}, owned: true}, nil
+	d0 := &OracleDriver{db: db, dialect: &OracleDialect{}, owned: true}
+	d0.initWide()
+	return d0, nil
 }
 
 func (d *OracleDriver) Kind() dbcore.DatabaseKind { return dbcore.KindOracle }
