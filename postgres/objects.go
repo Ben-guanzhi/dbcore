@@ -128,4 +128,57 @@ func (d *PostgresDriver) RoutineDefinition(ctx context.Context, schema, name str
 	return strings.Join(parts, "\n\n"), nil
 }
 
+// Partitions lists a partitioned table's partitions. The parent itself is a
+// relkind='p' shell that holds no rows, so its children are what a structure
+// page shows; a plain table answers an empty list.
+func (d *PostgresDriver) Partitions(ctx context.Context, schema, table string) ([]dbcore.PartitionInfo, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.PartitionsQuery("postgresql", schema, table)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.PartitionInfo, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		rows, _ := dbcore.IntFrom(r[2])
+		out = append(out, dbcore.PartitionInfo{Name: r[0].S, Bound: strings.TrimSpace(r[1].S), Rows: rows})
+	}
+	return out, nil
+}
+
+// EnumTypes groups pg_enum's one-row-per-label into one entry per type,
+// preserving declaration order.
+func (d *PostgresDriver) EnumTypes(ctx context.Context, schema string) ([]dbcore.EnumTypeInfo, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.EnumTypesQuery("postgresql", schema)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.EnumTypeInfo, 0, len(res.Rows))
+	index := make(map[string]int, len(res.Rows))
+	for _, r := range res.Rows {
+		name := r[0].S
+		if i, ok := index[name]; ok {
+			out[i].Labels = append(out[i].Labels, r[1].S)
+			continue
+		}
+		index[name] = len(out)
+		out = append(out, dbcore.EnumTypeInfo{Name: name, Labels: []string{r[1].S}})
+	}
+	return out, nil
+}
+
 var _ dbcore.ExtraMetadataReader = (*PostgresDriver)(nil)

@@ -355,3 +355,27 @@ type RoutineInfo struct {
 	Name string
 	Kind string
 }
+
+// PartitionInfo is one partition of a partitioned table.
+//
+// Name is the engine's partition label: PostgreSQL reports the partition
+// child table's name, MySQL and Oracle the partition name, and SQL Server the
+// partition number as text (it has no partition names). Bound is the
+// engine-rendered boundary text — PostgreSQL's "FOR VALUES FROM (a) TO (b)",
+// MySQL/Oracle's "LESS THAN (n)", SQL Server's "<= n" / "< n" / "unbounded" —
+// empty when the engine reports none. Rows is an approximate row count, -1
+// when the engine has no estimate.
+type PartitionInfo struct {
+	Name  string
+	Bound string
+	Rows  int64
+}
+
+// EnumTypeInfo is one user-defined enum type and its labels in declaration
+// order. Only PostgreSQL has standalone enum types; MySQL's ENUM is a column
+// type (already visible through ColumnInfo.Type), and SQL Server, Oracle and
+// SQLite have no equivalent, so those engines answer ErrNotSupported.
+type EnumTypeInfo struct {
+	Name   string
+	Labels []string
+}

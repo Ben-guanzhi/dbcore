@@ -30,6 +30,12 @@ type fixtures struct {
 	dropView    func(view string) []string
 	dropSeq     func(name string) []string
 	dropRoutine func(name string) []string
+	// partitioned creates a partitioned table and reports the partition names
+	// the engine stores, plus teardown statements in execution order.
+	partitioned func(table string) (ddl []string, names []string, drop []string)
+	// enumType creates one user-defined enum type and reports its labels in
+	// declaration order.
+	enumType func(name string) (ddl []string, labels []string, drop []string)
 }
 
 // fixturesFor returns the fixture set for kind. Unknown kinds get the SQLite
@@ -55,6 +61,11 @@ func fixturesFor(kind dbcore.DatabaseKind) fixtures {
 				return []string{fmt.Sprintf("CREATE FUNCTION %s() RETURNS INT DETERMINISTIC RETURN 1", name)}
 			},
 			routineKind: dbcore.RoutineFunction,
+			partitioned: func(table string) ([]string, []string, []string) {
+				return []string{fmt.Sprintf("CREATE TABLE %s (id INT, qty INT) PARTITION BY RANGE (qty) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN MAXVALUE)", table)},
+					[]string{"p0", "p1"},
+					[]string{DropTableSQL(dbcore.KindMySQL, table)}
+			},
 			dropView:    func(v string) []string { return []string{"DROP VIEW IF EXISTS " + v} },
 			dropRoutine: func(n string) []string { return []string{"DROP FUNCTION IF EXISTS " + n} },
 		}
@@ -80,6 +91,20 @@ func fixturesFor(kind dbcore.DatabaseKind) fixtures {
 				return []string{fmt.Sprintf("CREATE FUNCTION %s() RETURNS int LANGUAGE sql AS 'SELECT 1'", name)}
 			},
 			routineKind: dbcore.RoutineFunction,
+			partitioned: func(table string) ([]string, []string, []string) {
+				return []string{
+						fmt.Sprintf("CREATE TABLE %s (id INTEGER, qty INTEGER) PARTITION BY RANGE (qty)", table),
+						fmt.Sprintf("CREATE TABLE %s_p0 PARTITION OF %s FOR VALUES FROM (0) TO (10)", table, table),
+						fmt.Sprintf("CREATE TABLE %s_p1 PARTITION OF %s FOR VALUES FROM (10) TO (100)", table, table),
+					},
+					[]string{table + "_p0", table + "_p1"},
+					[]string{"DROP TABLE IF EXISTS " + quoteBare(dbcore.KindPostgres, table) + " CASCADE"}
+			},
+			enumType: func(name string) ([]string, []string, []string) {
+				return []string{fmt.Sprintf("CREATE TYPE %s AS ENUM ('sad', 'ok', 'happy')", name)},
+					[]string{"sad", "ok", "happy"},
+					[]string{"DROP TYPE IF EXISTS " + quoteBare(dbcore.KindPostgres, name)}
+			},
 			dropView:    func(v string) []string { return []string{"DROP VIEW IF EXISTS " + v} },
 			dropSeq:     func(n string) []string { return []string{"DROP SEQUENCE IF EXISTS " + n} },
 			dropRoutine: func(n string) []string { return []string{"DROP FUNCTION IF EXISTS " + n + "()"} },
@@ -106,6 +131,21 @@ func fixturesFor(kind dbcore.DatabaseKind) fixtures {
 				return []string{fmt.Sprintf("CREATE PROCEDURE %s AS SELECT 1", name)}
 			},
 			routineKind: dbcore.RoutineProcedure,
+			partitioned: func(table string) ([]string, []string, []string) {
+				pf := "pf_" + table
+				ps := "ps_" + table
+				return []string{
+						fmt.Sprintf("CREATE PARTITION FUNCTION %s (int) AS RANGE LEFT FOR VALUES (10)", pf),
+						fmt.Sprintf("CREATE PARTITION SCHEME %s AS PARTITION %s ALL TO ([PRIMARY])", ps, pf),
+						fmt.Sprintf("CREATE TABLE %s (id INT, qty INT) ON %s(qty)", table, ps),
+					},
+					[]string{"1", "2"},
+					[]string{
+						"IF OBJECT_ID('" + table + "', 'U') IS NOT NULL DROP TABLE " + table,
+						fmt.Sprintf("IF EXISTS (SELECT 1 FROM sys.partition_schemes WHERE name = '%s') DROP PARTITION SCHEME %s", ps, ps),
+						fmt.Sprintf("IF EXISTS (SELECT 1 FROM sys.partition_functions WHERE name = '%s') DROP PARTITION FUNCTION %s", pf, pf),
+					}
+			},
 			dropView: func(v string) []string {
 				return []string{fmt.Sprintf("IF OBJECT_ID('%s', 'V') IS NOT NULL DROP VIEW %s", v, v)}
 			},
@@ -141,6 +181,11 @@ func fixturesFor(kind dbcore.DatabaseKind) fixtures {
 				return []string{fmt.Sprintf("CREATE OR REPLACE PROCEDURE %s AS BEGIN NULL; END;", name)}
 			},
 			routineKind: dbcore.RoutineProcedure,
+			partitioned: func(table string) ([]string, []string, []string) {
+				return []string{fmt.Sprintf("CREATE TABLE %s (id NUMBER, qty NUMBER) PARTITION BY RANGE (qty) (PARTITION P0 VALUES LESS THAN (10), PARTITION PMAX VALUES LESS THAN (MAXVALUE))", table)},
+					[]string{"P0", "PMAX"},
+					[]string{oracleDrop("DROP TABLE " + table)}
+			},
 			dropView: func(v string) []string {
 				return []string{oracleDrop("DROP VIEW " + v)}
 			},

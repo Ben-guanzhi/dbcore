@@ -52,4 +52,15 @@ func (d *SQLiteDriver) RoutineDefinition(ctx context.Context, schema, name strin
 	return "", dbcore.ErrNotSupported
 }
 
+// Partitions is not supported: SQLite has no declarative table partitioning.
+func (d *SQLiteDriver) Partitions(ctx context.Context, schema, table string) ([]dbcore.PartitionInfo, error) {
+	return nil, dbcore.ErrNotSupported
+}
+
+// EnumTypes is not supported: SQLite has no user-defined enum types (a CHECK
+// constraint is the closest equivalent, and it has no catalog either).
+func (d *SQLiteDriver) EnumTypes(ctx context.Context, schema string) ([]dbcore.EnumTypeInfo, error) {
+	return nil, dbcore.ErrNotSupported
+}
+
 var _ dbcore.ExtraMetadataReader = (*SQLiteDriver)(nil)

@@ -337,6 +337,78 @@ func (h Harness) runExtraMetadataContract(t *testing.T, ctx context.Context, drv
 			t.Errorf("RoutineDefinition of a missing routine should fail")
 		}
 	})
+
+	t.Run("extra_partitions", func(t *testing.T) {
+		if fx.partitioned == nil {
+			if _, err := x.Partitions(ctx, h.Schema, table); !errors.Is(err, dbcore.ErrNotSupported) {
+				t.Fatalf("Partitions = %v, want ErrNotSupported", err)
+			}
+			return
+		}
+		parted := fold(fmt.Sprintf("dbcore_ct_part_%d", rand.Int63()))
+		ddl, wantNames, drop := fx.partitioned(parted)
+		create("partitioned table", ddl)
+		defer dropAll(drop)
+
+		got, err := x.Partitions(ctx, h.Schema, parted)
+		if err != nil {
+			t.Fatalf("Partitions: %v", err)
+		}
+		if len(got) != len(wantNames) {
+			t.Fatalf("partitions = %+v, want %d (%v)", got, len(wantNames), wantNames)
+		}
+		for i, want := range wantNames {
+			if !strings.EqualFold(got[i].Name, want) {
+				t.Errorf("partition %d name = %q, want %q", i, got[i].Name, want)
+			}
+			if got[i].Bound == "" {
+				t.Errorf("partition %q reports no boundary text", got[i].Name)
+			}
+		}
+
+		// A plain table answers an empty list on an engine that HAS the
+		// concept: "not partitioned" and "cannot read partitions" differ.
+		plain, err := x.Partitions(ctx, h.Schema, table)
+		if err != nil {
+			t.Fatalf("Partitions(plain table): %v", err)
+		}
+		if len(plain) != 0 {
+			t.Errorf("plain table reports partitions: %+v", plain)
+		}
+	})
+
+	t.Run("extra_enum_types", func(t *testing.T) {
+		if fx.enumType == nil {
+			if _, err := x.EnumTypes(ctx, h.Schema); !errors.Is(err, dbcore.ErrNotSupported) {
+				t.Fatalf("EnumTypes = %v, want ErrNotSupported", err)
+			}
+			return
+		}
+		enum := fold(fmt.Sprintf("dbcore_ct_enum_%d", rand.Int63()))
+		ddl, wantLabels, drop := fx.enumType(enum)
+		create("enum type", ddl)
+		defer dropAll(drop)
+
+		got, err := x.EnumTypes(ctx, h.Schema)
+		if err != nil {
+			t.Fatalf("EnumTypes: %v", err)
+		}
+		for _, e := range got {
+			if !strings.EqualFold(e.Name, enum) {
+				continue
+			}
+			if len(e.Labels) != len(wantLabels) {
+				t.Fatalf("enum %q labels = %v, want %v", enum, e.Labels, wantLabels)
+			}
+			for i := range wantLabels {
+				if e.Labels[i] != wantLabels[i] {
+					t.Errorf("enum label %d = %q, want %q (declaration order)", i, e.Labels[i], wantLabels[i])
+				}
+			}
+			return
+		}
+		t.Fatalf("enum type %q missing from %+v", enum, got)
+	})
 }
 
 // kind returns the harness's engine, defaulting to the portable SQLite shape

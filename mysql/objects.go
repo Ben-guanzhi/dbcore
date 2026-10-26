@@ -7,6 +7,7 @@ package mysql
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dbcore/dbcore"
 	"github.com/dbcore/dbcore/sqltext"
@@ -122,6 +123,40 @@ func (d *MySQLDriver) RoutineDefinition(ctx context.Context, schema, name string
 		return string(v.B), nil
 	}
 	return "", fmt.Errorf("mysql: routine %q has no readable definition", name)
+}
+
+// Partitions lists a partitioned table's partitions (information_schema
+// reports one row per partition; a plain table has none). TABLE_ROWS is an
+// estimate from the storage engine, and arrives as text.
+func (d *MySQLDriver) Partitions(ctx context.Context, schema, table string) ([]dbcore.PartitionInfo, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.PartitionsQuery("mysql", schema, table)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.PartitionInfo, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		rows, _ := dbcore.IntFrom(r[2])
+		bound := ""
+		if desc := strings.TrimSpace(r[1].S); desc != "" {
+			bound = "LESS THAN (" + desc + ")"
+		}
+		out = append(out, dbcore.PartitionInfo{Name: r[0].S, Bound: bound, Rows: rows})
+	}
+	return out, nil
+}
+
+// EnumTypes is not supported: MySQL's ENUM is a column type, not a schema
+// object. It already reaches consumers as the column's type text ("enum('a','b')").
+func (d *MySQLDriver) EnumTypes(ctx context.Context, schema string) ([]dbcore.EnumTypeInfo, error) {
+	return nil, dbcore.ErrNotSupported
 }
 
 var _ dbcore.ExtraMetadataReader = (*MySQLDriver)(nil)

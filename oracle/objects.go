@@ -133,4 +133,39 @@ func (d *OracleDriver) RoutineDefinition(ctx context.Context, schema, name strin
 	return source, nil
 }
 
+// Partitions lists a table's top-level partitions (ALL_TAB_PARTITIONS).
+// HIGH_VALUE is a LONG column, so it comes back as its raw text ("10",
+// "MAXVALUE", "DATE '2026-01-01'") and is wrapped into LESS THAN (...) here.
+// Sub-partitions are not listed; NUM_ROWS is the optimizer's estimate.
+func (d *OracleDriver) Partitions(ctx context.Context, schema, table string) ([]dbcore.PartitionInfo, error) {
+	s, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.PartitionsQuery("oracle", s, table)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.PartitionInfo, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		bound := ""
+		if high := strings.TrimSpace(r[1].S); high != "" {
+			bound = "LESS THAN (" + high + ")"
+		}
+		rows, _ := dbcore.IntFrom(r[2])
+		out = append(out, dbcore.PartitionInfo{Name: r[0].S, Bound: bound, Rows: rows})
+	}
+	return out, nil
+}
+
+// EnumTypes is not supported: Oracle has no user-defined enum types (CHECK
+// constraints over VARCHAR2 columns are the usual substitute).
+func (d *OracleDriver) EnumTypes(ctx context.Context, schema string) ([]dbcore.EnumTypeInfo, error) {
+	return nil, dbcore.ErrNotSupported
+}
+
 var _ dbcore.ExtraMetadataReader = (*OracleDriver)(nil)

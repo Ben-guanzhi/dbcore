@@ -253,3 +253,75 @@ func RoutineDefinitionQuery(dbType, schema, name, kind string) (string, []interf
 	}
 	return "", nil, fmt.Errorf("sqltext: engine %q has no stored routines", dbType)
 }
+
+// PartitionsQuery lists a table's partitions: label, boundary text and an
+// approximate row count. SQLite has no partitioning and therefore no recipe.
+func PartitionsQuery(dbType, schema, table string) (string, []interface{}, error) {
+	switch Normalize(dbType) {
+	case Postgres:
+		// A partitioned table's partitions are ordinary child tables; relkind
+		// 'p' on the parent means the parent itself holds no rows.
+		return `SELECT c.relname, COALESCE(pg_get_expr(c.relpartbound, c.oid), ''),
+				CAST(GREATEST(c.reltuples, -1) AS bigint)
+			FROM pg_inherits i
+			INNER JOIN pg_class c ON c.oid = i.inhrelid
+			INNER JOIN pg_class p ON p.oid = i.inhparent
+			INNER JOIN pg_namespace n ON n.oid = p.relnamespace
+			WHERE n.nspname = $1 AND p.relname = $2
+			ORDER BY c.relname`,
+			[]interface{}{schema, table}, nil
+	case MySQL:
+		return `SELECT PARTITION_NAME, COALESCE(PARTITION_DESCRIPTION, ''),
+				COALESCE(TABLE_ROWS, 0)
+			FROM information_schema.PARTITIONS
+			WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND PARTITION_NAME IS NOT NULL
+			ORDER BY PARTITION_ORDINAL_POSITION`,
+			[]interface{}{schema, table}, nil
+	case SQLServer:
+		// SQL Server has no partition names: the number is the identity. Every
+		// table has a partition 1, so the partition scheme (ps.name) tells a
+		// really partitioned index from an ordinary one. The boundary value
+		// attached to partition N is its upper bound for RANGE LEFT and its
+		// exclusive upper bound for RANGE RIGHT (boundary_value_on_right).
+		return fmt.Sprintf(`SELECT CAST(p.partition_number AS nvarchar(10)),
+				COALESCE(CAST(prv.value AS nvarchar(64)), ''),
+				COALESCE(CAST(p.rows AS bigint), 0),
+				COALESCE(pf.boundary_value_on_right, 0),
+				COALESCE(ps.name, '')
+			FROM sys.partitions p
+			INNER JOIN sys.indexes i ON i.object_id = p.object_id AND i.index_id = p.index_id
+			INNER JOIN sys.tables t ON t.object_id = p.object_id
+			INNER JOIN sys.schemas s ON s.schema_id = t.schema_id
+			LEFT JOIN sys.partition_schemes ps ON ps.data_space_id = i.data_space_id
+			LEFT JOIN sys.partition_functions pf ON pf.function_id = ps.function_id
+			LEFT JOIN sys.partition_range_values prv
+				ON prv.function_id = pf.function_id AND prv.boundary_id = p.partition_number
+			WHERE s.name = %s AND t.name = %s AND i.index_id IN (0, 1)
+			ORDER BY p.partition_number`,
+			QuotedLiteral(SQLServer, schema), QuotedLiteral(SQLServer, table)), nil, nil
+	case Oracle:
+		// HIGH_VALUE is a LONG: it must be selected bare (no NVL/concat).
+		return fmt.Sprintf(`SELECT PARTITION_NAME, HIGH_VALUE, NVL(NUM_ROWS, 0)
+			FROM ALL_TAB_PARTITIONS
+			WHERE TABLE_OWNER = %s AND TABLE_NAME = %s
+			ORDER BY PARTITION_POSITION`,
+			QuotedLiteral(Oracle, upperASCII(schema)), QuotedLiteral(Oracle, upperASCII(table))), nil, nil
+	}
+	return "", nil, fmt.Errorf("sqltext: engine %q has no table partitioning", dbType)
+}
+
+// EnumTypesQuery lists a schema's user-defined enum types one label per row, in
+// declaration order (drivers group by type). Only PostgreSQL has them: MySQL's
+// ENUM is a per-column type, SQL Server/Oracle/SQLite have no equivalent.
+func EnumTypesQuery(dbType, schema string) (string, []interface{}, error) {
+	if Normalize(dbType) != Postgres {
+		return "", nil, fmt.Errorf("sqltext: engine %q has no user-defined enum types", dbType)
+	}
+	return `SELECT t.typname, e.enumlabel
+		FROM pg_type t
+		INNER JOIN pg_enum e ON e.enumtypid = t.oid
+		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		WHERE n.nspname = $1
+		ORDER BY t.typname, e.enumsortorder`,
+		[]interface{}{schema}, nil
+}

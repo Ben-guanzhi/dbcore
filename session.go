@@ -248,6 +248,15 @@ type ExtraMetadataReader interface {
 	// overload, so those are joined by a blank line; the other engines answer
 	// one. SQLite has no stored routines.
 	RoutineDefinition(ctx context.Context, schema, name string) (string, error)
+	// Partitions lists one table's partitions in partition order. A table that
+	// is simply not partitioned answers an empty list (the concept exists);
+	// SQLite has no partitioning and answers ErrNotSupported.
+	Partitions(ctx context.Context, schema, table string) ([]PartitionInfo, error)
+	// EnumTypes lists one schema's user-defined enum types with their labels in
+	// declaration order. Only PostgreSQL has standalone enum types, so the
+	// other engines answer ErrNotSupported (MySQL's ENUM is a column type and
+	// already shows up in ColumnInfo.Type).
+	EnumTypes(ctx context.Context, schema string) ([]EnumTypeInfo, error)
 }
 
 // AsExtraMetadata is the capability assertion helper, matching AsSQLTx and

@@ -167,3 +167,41 @@ func TestRoutineKindQueryIsMySQLOnly(t *testing.T) {
 		}
 	}
 }
+
+// Partitions: binds on PostgreSQL/MySQL, inline literals on the two catalogs
+// that address objects by name, and no recipe on SQLite.
+func TestPartitionsQueryPerEngine(t *testing.T) {
+	if _, _, err := PartitionsQuery("sqlite", "main", "t"); err == nil {
+		t.Fatal("sqlite has no partitioning; want an error")
+	}
+	q, args, err := PartitionsQuery("mysql", "app", "t")
+	if err != nil || len(args) != 2 || !strings.Contains(q, "information_schema.PARTITIONS") {
+		t.Fatalf("mysql: %v %q %v", err, q, args)
+	}
+	q, args, err = PartitionsQuery("postgresql", "public", "t")
+	if err != nil || len(args) != 2 || !strings.Contains(q, "pg_inherits") || !strings.Contains(q, "$2") {
+		t.Fatalf("pg: %v %q %v", err, q, args)
+	}
+	q, args, err = PartitionsQuery("sqlserver", "dbo", "t")
+	if err != nil || len(args) != 0 || !strings.Contains(q, "sys.partition_schemes") ||
+		!strings.Contains(q, "boundary_value_on_right") || !strings.Contains(q, "'dbo'") {
+		t.Fatalf("mssql: %v %q %v", err, q, args)
+	}
+	q, args, err = PartitionsQuery("oracle", "app", "t")
+	if err != nil || len(args) != 0 || !strings.Contains(q, "ALL_TAB_PARTITIONS") ||
+		!strings.Contains(q, "HIGH_VALUE") || !strings.Contains(q, "'APP'") {
+		t.Fatalf("oracle: %v %q %v", err, q, args)
+	}
+}
+
+func TestEnumTypesQueryIsPostgresOnly(t *testing.T) {
+	q, args, err := EnumTypesQuery("postgresql", "public")
+	if err != nil || len(args) != 1 || !strings.Contains(q, "pg_enum") || !strings.Contains(q, "$1") {
+		t.Fatalf("pg: %v %q %v", err, q, args)
+	}
+	for _, dbType := range []string{"mysql", "sqlserver", "oracle", "sqlite"} {
+		if _, _, err := EnumTypesQuery(dbType, "s"); err == nil {
+			t.Fatalf("%s has no user-defined enum types; want an error", dbType)
+		}
+	}
+}
