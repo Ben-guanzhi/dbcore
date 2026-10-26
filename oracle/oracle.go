@@ -175,6 +175,7 @@ func (d *OracleDriver) ListColumns(ctx context.Context, schema, table string) ([
 	for _, r := range res.Rows {
 		ci := dbcore.ColumnInfo{
 			Name:         r[0].S,
+			Table:        table,
 			Type:         r[1].S,
 			Nullable:     r[2].S == "Y",
 			IsPrimaryKey: r[4].I != 0,

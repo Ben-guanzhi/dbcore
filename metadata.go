@@ -2,6 +2,7 @@ package dbcore
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,6 +34,12 @@ type ColumnInfo struct {
 	Default      *string
 	IsPrimaryKey bool   // column participates in the primary key
 	Comment      string // column comment; empty when unset or the engine has none (SQLite)
+	// Table is the table the column was read from, filled by the catalog paths.
+	// It is empty for result-set columns: those come from rows.ColumnTypes(),
+	// which carries no table. A column's identity is (Table, Name), so this
+	// plus the duplicate-name suffixing the result paths apply is what lets a
+	// JOIN that projects two `id`s stay distinguishable end to end.
+	Table string
 	// OrdinalPosition is the column's 1-based position in the table (attnum /
 	// ORDINAL_POSITION / column_id / cid+1); 0 when the engine reports none.
 	OrdinalPosition int32
@@ -40,6 +47,28 @@ type ColumnInfo struct {
 	// GENERATED ... AS IDENTITY, is_identity, identity_column) and PostgreSQL
 	// serial columns, whose default is nextval(...) over the column's sequence.
 	IsAutoIncrement bool
+}
+
+// DisambiguateColumnNames makes duplicate column names unique, in place, and
+// returns the slice. A JOIN projecting two `id`s otherwise yields two columns
+// with the same key: grids key widths/filters/edits by name, so the second one
+// silently shadows the first. The second occurrence becomes "id_2", the third
+// "id_3", and a suffix that itself collides with a later real column keeps
+// bumping. Comparison is case-insensitive because engines fold unquoted
+// identifiers. Order and every other field are preserved — the disambiguated
+// name is a display key, not a rename of the database object.
+func DisambiguateColumnNames(cols []ColumnInfo) []ColumnInfo {
+	used := make(map[string]bool, len(cols))
+	for i := range cols {
+		base := cols[i].Name
+		name := base
+		for n := 2; used[strings.ToLower(name)]; n++ {
+			name = base + "_" + strconv.Itoa(n)
+		}
+		used[strings.ToLower(name)] = true
+		cols[i].Name = name
+	}
+	return cols
 }
 
 // Index kind values reported by every driver.

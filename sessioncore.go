@@ -439,6 +439,8 @@ func (s *SessionCore) QueryStream(
 		}
 		columns[i] = ci
 	}
+	// Two same-named projections (a JOIN) must not share a display key.
+	DisambiguateColumnNames(columns)
 
 	out := &StreamResult{Columns: columns}
 	sent := false

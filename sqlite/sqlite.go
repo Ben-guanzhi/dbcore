@@ -120,6 +120,7 @@ func (d *SQLiteDriver) ListColumns(ctx context.Context, schema, table string) ([
 	for _, r := range res.Rows {
 		ci := dbcore.ColumnInfo{
 			Name:         r[0].S,
+			Table:        table,
 			Type:         r[1].S,
 			Nullable:     r[2].I == 0,
 			IsPrimaryKey: r[4].I > 0, // pragma_table_info.pk: 0 = not in the PK, n = PK position

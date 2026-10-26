@@ -116,6 +116,11 @@ func (h Harness) Run(t *testing.T) {
 			if c.Name != "" && c.Type == "" {
 				t.Errorf("column %q has empty Type (metadata gap)", c.Name)
 			}
+			// A catalog column knows its table (P3-9): the field is what lets a
+			// caller tell two same-named columns of different tables apart.
+			if c.Table != name {
+				t.Errorf("column %q Table = %q, want %q", c.Name, c.Table, name)
+			}
 		}
 	})
 

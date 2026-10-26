@@ -57,6 +57,9 @@ func rowsToResult(rows *sql.Rows) (*QueryResult, error) {
 		}
 		res.Columns[i] = ci
 	}
+	// rows.ColumnTypes() cannot tell two same-named projections apart; give the
+	// duplicates distinct keys so the grid does not fold them together.
+	DisambiguateColumnNames(res.Columns)
 
 	for rows.Next() {
 		holders := make([]any, len(colNames))
