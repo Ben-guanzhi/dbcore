@@ -6,7 +6,10 @@ package sqltext
 // differences (placeholder style, ILIKE vs LIKE, TOP vs ROWNUM) are the same
 // differences already encoded in TablesQuery.
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // SearchObjectsQuery returns a statement selecting (schema, name, type) for
 // objects whose name matches fragment, capped at limit rows.
@@ -71,4 +74,67 @@ func upperASCII(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// SearchDataQuery returns a statement searching keyword through ONE row of a
+// table: the columns listed (already qualified/quoted by the caller's
+// QualifiedTable) OR'd with a LIKE test, capped at limit rows. The keyword is
+// escaped as a literal fragment, never interpreted as a pattern.
+//
+// columns arrive as SQL fragments on purpose: which columns can hold readable
+// text is a per-engine type question (ColumnType.IsDescriptive) the caller
+// answers from the catalog, while HOW to spell the limit, the bind and the
+// escape stays here. MySQL is case-insensitive by collation; PostgreSQL uses
+// ILIKE so the search behaves like the object search next to it; the rest use
+// LIKE with the engine's escape spelling.
+func SearchDataQuery(dbType, table string, columns []string, keyword string, limit int) (string, []interface{}, error) {
+	if limit <= 0 {
+		return "", nil, fmt.Errorf("sqltext: search limit must be positive, got %d", limit)
+	}
+	if len(columns) == 0 {
+		return "", nil, fmt.Errorf("sqltext: search needs at least one column")
+	}
+	pattern := LikePattern(keyword)
+	conds := make([]string, len(columns))
+	for i, col := range columns {
+		conds[i] = col
+	}
+	switch Normalize(dbType) {
+	case MySQL, SQLite:
+		joined := ""
+		var args []interface{}
+		for i, col := range conds {
+			if i > 0 {
+				joined += " OR "
+			}
+			joined += col + " LIKE ?"
+			args = append(args, pattern)
+		}
+		return fmt.Sprintf("SELECT * FROM %s WHERE %s LIMIT %d", table, joined, limit), args, nil
+	case Postgres:
+		var parts []string
+		args := make([]interface{}, 0, len(conds)+1)
+		for i, col := range conds {
+			parts = append(parts, fmt.Sprintf("%s ILIKE $%d", col, i+1))
+			args = append(args, pattern)
+		}
+		return fmt.Sprintf("SELECT * FROM %s WHERE %s LIMIT %d", table, strings.Join(parts, " OR "), limit), args, nil
+	case SQLServer:
+		// go-mssqldb leaves "?" unrewritten on literal paths (see
+		// SearchObjectsQuery's note), so the pattern rides inline.
+		for i, col := range conds {
+			conds[i] = col + " LIKE " + QuotedLiteral(SQLServer, pattern) + ` ESCAPE '\'`
+		}
+		return fmt.Sprintf("SELECT TOP (%d) * FROM %s WHERE %s", limit, table, strings.Join(conds, " OR ")), nil, nil
+	case Oracle:
+		// ROWNUM caps the scan. The keyword is NOT upper-cased: identifiers
+		// fold to upper in Oracle's catalog, but DATA is case-sensitive, and
+		// silently searching "alice" as "ALICE" would miss rows.
+		for i, col := range conds {
+			conds[i] = col + " LIKE " + QuotedLiteral(Oracle, pattern) + ` ESCAPE '\'`
+		}
+		return fmt.Sprintf("SELECT * FROM %s WHERE (%s) AND ROWNUM <= %d",
+			table, strings.Join(conds, " OR "), limit), nil, nil
+	}
+	return "", nil, fmt.Errorf("sqltext: unsupported engine %q for data search", dbType)
 }
