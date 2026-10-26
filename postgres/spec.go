@@ -58,8 +58,29 @@ func DSN(spec dbcore.ConnSpec) string {
 	if spec.ConnectTimeout > 0 {
 		q.Set("connect_timeout", strconv.Itoa(int(spec.ConnectTimeout.Seconds())+1))
 	}
+	// Caller params first: the statement timeout below merges into whatever
+	// options value they left, instead of being overwritten by it.
 	for k, v := range spec.Params {
 		q.Set(k, v)
+	}
+	// statement_timeout is a runtime GUC, so it travels in libpq's options.
+	// Milliseconds, like the server setting itself.
+	if spec.StatementTimeout > 0 {
+		opt := "-c statement_timeout=" + strconv.FormatInt(spec.StatementTimeout.Milliseconds(), 10)
+		if prev := q.Get("options"); prev != "" {
+			opt = prev + " " + opt
+		}
+		q.Set("options", opt)
+	}
+	// Client-certificate paths; pgx reads the same libpq names.
+	if spec.ClientCert != "" {
+		q.Set("sslcert", spec.ClientCert)
+	}
+	if spec.ClientKey != "" {
+		q.Set("sslkey", spec.ClientKey)
+	}
+	if spec.RootCert != "" {
+		q.Set("sslrootcert", spec.RootCert)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()

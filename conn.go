@@ -58,6 +58,24 @@ type ConnSpec struct {
 	// there rather than silently dropped.
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	// StatementTimeout bounds how long one statement may run on the server
+	// (0 = engine default). MySQL wires max_execution_time (milliseconds,
+	// SELECT only — the engine has no knob for writes); PostgreSQL wires
+	// statement_timeout through libpq's options. MSSQL, Oracle and SQLite have
+	// no session-level equivalent, so they accept it and rely on the caller's
+	// context, like the read/write timeouts above.
+	StatementTimeout time.Duration
+	// ClientCert / ClientKey / RootCert are PEM file paths for TLS. PostgreSQL
+	// passes them as sslcert/sslkey/sslrootcert; MySQL builds a per-connection
+	// tls.Config and registers it with the driver. Empty means "not used".
+	ClientCert string
+	ClientKey  string
+	RootCert   string
+	// InterpolateParams asks MySQL to render values client-side instead of
+	// using server-side prepared statements (go-sql-driver's interpolateParams).
+	// Off by default; it is the escape hatch for poolers/proxies that cannot
+	// carry prepared statements across their own connection multiplexing.
+	InterpolateParams bool
 	// Dialer overrides the TCP transport, e.g. to route through an in-process
 	// SSH tunnel. Engines that cannot honour it return ErrNotSupported.
 	Dialer Dialer

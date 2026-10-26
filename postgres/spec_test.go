@@ -3,6 +3,7 @@ package postgres
 import (
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/dbcore/dbcore"
 )
@@ -71,5 +72,47 @@ func TestSSLModeMapping(t *testing.T) {
 		if got := sslMode(mode); got != want {
 			t.Errorf("sslMode(%q) = %q, want %q", mode, got, want)
 		}
+	}
+}
+
+// P3-6: the statement cap travels as a runtime GUC in libpq's options, and the
+// client-certificate paths under their libpq names.
+func TestDSNCarriesStatementTimeoutAndCertPaths(t *testing.T) {
+	spec := dbcore.ConnSpec{
+		Kind:             dbcore.KindPostgres,
+		Host:             "h",
+		Database:         "app",
+		SSLMode:          "verify-ca",
+		StatementTimeout: 5 * time.Second,
+		ClientCert:       "/certs/client.pem",
+		ClientKey:        "/certs/client.key",
+		RootCert:         "/certs/root.pem",
+		Params:           map[string]string{"application_name": "t"},
+	}
+	u, err := url.Parse(DSN(spec))
+	if err != nil {
+		t.Fatalf("parse dsn: %v", err)
+	}
+	q := u.Query()
+	if got := q.Get("options"); got != "-c statement_timeout=5000" {
+		t.Errorf("options = %q, want the 5000ms statement timeout", got)
+	}
+	if q.Get("sslcert") != "/certs/client.pem" || q.Get("sslkey") != "/certs/client.key" {
+		t.Errorf("client certificate paths missing: %v", q)
+	}
+	if q.Get("sslrootcert") != "/certs/root.pem" {
+		t.Errorf("root certificate path missing: %v", q)
+	}
+	if q.Get("sslmode") != "verify-ca" {
+		t.Errorf("sslmode = %q, want verify-ca (not upgraded)", q.Get("sslmode"))
+	}
+	// A caller-supplied options value must be kept, not replaced.
+	spec.Params["options"] = "-c search_path=public"
+	u2, err := url.Parse(DSN(spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u2.Query().Get("options"); got != "-c search_path=public -c statement_timeout=5000" {
+		t.Errorf("options = %q, want the caller's setting kept", got)
 	}
 }

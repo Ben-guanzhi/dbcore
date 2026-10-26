@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	drvmysql "github.com/go-sql-driver/mysql"
 
@@ -86,5 +87,52 @@ func TestDSNWithDialerRoutesThroughRegisteredNetwork(t *testing.T) {
 	}
 	if cfg.Addr != "h:3306" {
 		t.Fatalf("Addr = %q", cfg.Addr)
+	}
+}
+
+// P3-6: max_execution_time is the only per-statement cap MySQL has, and it
+// travels as a session variable through the DSN.
+func TestDSNCarriesStatementTimeoutAndInterpolation(t *testing.T) {
+	cfg, err := drvmysql.ParseDSN(DSN(dbcore.ConnSpec{
+		Kind:              dbcore.KindMySQL,
+		Host:              "h",
+		Port:              3306,
+		User:              "u",
+		StatementTimeout:  30 * time.Second,
+		InterpolateParams: true,
+	}))
+	if err != nil {
+		t.Fatalf("ParseDSN: %v", err)
+	}
+	if got := cfg.Params["max_execution_time"]; got != "30000" {
+		t.Errorf("max_execution_time = %q, want 30000", got)
+	}
+	if !cfg.InterpolateParams {
+		t.Error("InterpolateParams was dropped")
+	}
+}
+
+// verify-ca must not become verify-full: go-sql-driver's "true" mode checks the
+// hostname, so the mode needs a registered config that verifies the chain only.
+func TestVerifyCAUsesCustomTLSConfig(t *testing.T) {
+	if !needsCustomTLS(dbcore.ConnSpec{Kind: dbcore.KindMySQL, SSLMode: "verify-ca"}) {
+		t.Fatal("verify-ca should need a custom config")
+	}
+	name, err := registerTLS(dbcore.ConnSpec{Kind: dbcore.KindMySQL, SSLMode: "verify-ca"})
+	if err != nil {
+		t.Fatalf("registerTLS: %v", err)
+	}
+	if !strings.HasPrefix(name, "dbcore-tls-") {
+		t.Fatalf("name = %q, want a registered dbcore-tls-* config", name)
+	}
+	// A plain require mode keeps the driver's own named mode.
+	if needsCustomTLS(dbcore.ConnSpec{Kind: dbcore.KindMySQL, SSLMode: "require"}) {
+		t.Error("require should not need a custom config")
+	}
+	// Half a client certificate is refused rather than silently ignored.
+	if _, err := registerTLS(dbcore.ConnSpec{
+		Kind: dbcore.KindMySQL, ClientCert: "/certs/client.pem",
+	}); err == nil {
+		t.Error("a client certificate without a key was accepted")
 	}
 }

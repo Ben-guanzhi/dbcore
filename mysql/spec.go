@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -50,8 +51,18 @@ func DSN(spec dbcore.ConnSpec) string {
 	cfg.Timeout = spec.ConnectTimeout
 	cfg.ReadTimeout = spec.ReadTimeout
 	cfg.WriteTimeout = spec.WriteTimeout
+	cfg.InterpolateParams = spec.InterpolateParams
 	if tls := tlsParam(spec.SSLMode); tls != "" {
 		cfg.TLSConfig = tls
+	}
+	// max_execution_time is MySQL's only per-statement cap (SELECT only; the
+	// engine has nothing equivalent for writes). The driver forwards unknown
+	// DSN parameters as session variables.
+	if spec.StatementTimeout > 0 {
+		if cfg.Params == nil {
+			cfg.Params = map[string]string{}
+		}
+		cfg.Params["max_execution_time"] = strconv.FormatInt(spec.StatementTimeout.Milliseconds(), 10)
 	}
 	for k, v := range spec.Params {
 		if cfg.Params == nil {
@@ -72,6 +83,18 @@ func DSN(spec dbcore.ConnSpec) string {
 
 // OpenSpec implements dbcore.Factory.
 func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig) (dbcore.Driver, error) {
+	// A client certificate or verify-ca needs a registered tls.Config; its name
+	// rides in Params, which DSN applies after the mode mapping, so it wins.
+	if name, err := registerTLS(spec); err != nil {
+		return nil, err
+	} else if name != "" {
+		params := make(map[string]string, len(spec.Params)+1)
+		for k, v := range spec.Params {
+			params[k] = v
+		}
+		params["tls"] = name
+		spec.Params = params
+	}
 	db, err := sql.Open(DriverName, DSN(spec))
 	if err != nil {
 		return nil, err
