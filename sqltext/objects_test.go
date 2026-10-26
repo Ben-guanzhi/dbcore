@@ -127,3 +127,43 @@ func TestRoutinesQueryPerEngine(t *testing.T) {
 		t.Fatalf("oracle: %v %q %v", err, q, args)
 	}
 }
+
+// MySQL has two SHOW CREATE statements; every other engine renders the
+// definition from one query, and SQLite has none.
+func TestRoutineDefinitionQueryPerEngine(t *testing.T) {
+	if _, _, err := RoutineDefinitionQuery("sqlite", "main", "f", ""); err == nil {
+		t.Fatal("sqlite has no routines; want an error")
+	}
+	q, args, err := RoutineDefinitionQuery("mysql", "app", "p", "PROCEDURE")
+	if err != nil || len(args) != 0 || q != "SHOW CREATE PROCEDURE `p`" {
+		t.Fatalf("mysql procedure: %v %q %v", err, q, args)
+	}
+	q, _, err = RoutineDefinitionQuery("mysql", "app", "f", "FUNCTION")
+	if err != nil || q != "SHOW CREATE FUNCTION `f`" {
+		t.Fatalf("mysql function: %v %q", err, q)
+	}
+	q, args, err = RoutineDefinitionQuery("postgresql", "public", "f", "")
+	if err != nil || len(args) != 2 || !strings.Contains(q, "pg_get_functiondef") || !strings.Contains(q, "$2") {
+		t.Fatalf("pg: %v %q %v", err, q, args)
+	}
+	q, args, err = RoutineDefinitionQuery("sqlserver", "sales", "p", "")
+	if err != nil || len(args) != 0 || !strings.Contains(q, "OBJECT_DEFINITION") || !strings.Contains(q, "'sales.p'") {
+		t.Fatalf("mssql: %v %q %v", err, q, args)
+	}
+	q, args, err = RoutineDefinitionQuery("oracle", "app", "p_probe", "")
+	if err != nil || len(args) != 0 || !strings.Contains(q, "ALL_SOURCE") || !strings.Contains(q, "'P_PROBE'") {
+		t.Fatalf("oracle: %v %q %v", err, q, args)
+	}
+}
+
+func TestRoutineKindQueryIsMySQLOnly(t *testing.T) {
+	q, args, err := RoutineKindQuery("mysql", "app", "p")
+	if err != nil || len(args) != 2 || !strings.Contains(q, "ROUTINE_TYPE") {
+		t.Fatalf("mysql: %v %q %v", err, q, args)
+	}
+	for _, dbType := range []string{"postgresql", "sqlserver", "oracle", "sqlite"} {
+		if _, _, err := RoutineKindQuery(dbType, "s", "p"); err == nil {
+			t.Fatalf("%s should not need a kind lookup", dbType)
+		}
+	}
+}

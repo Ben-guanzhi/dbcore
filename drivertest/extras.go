@@ -294,6 +294,9 @@ func (h Harness) runExtraMetadataContract(t *testing.T, ctx context.Context, drv
 			if _, err := x.Routines(ctx, h.Schema); !errors.Is(err, dbcore.ErrNotSupported) {
 				t.Fatalf("Routines = %v, want ErrNotSupported", err)
 			}
+			if _, err := x.RoutineDefinition(ctx, h.Schema, "anything"); !errors.Is(err, dbcore.ErrNotSupported) {
+				t.Fatalf("RoutineDefinition = %v, want ErrNotSupported", err)
+			}
 			return
 		}
 		routine := fold(fmt.Sprintf("dbcore_ct_rt_%d", rand.Int63()))
@@ -316,6 +319,22 @@ func (h Harness) runExtraMetadataContract(t *testing.T, ctx context.Context, drv
 		}
 		if !found {
 			t.Fatalf("routine %q missing from %+v", routine, got)
+		}
+
+		// The definition must be re-runnable DDL naming the routine — that is
+		// what the structure page shows and copies.
+		def, err := x.RoutineDefinition(ctx, h.Schema, routine)
+		if err != nil {
+			t.Fatalf("RoutineDefinition: %v", err)
+		}
+		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(def)), "CREATE") {
+			t.Errorf("routine definition is not DDL:\n%s", def)
+		}
+		if !containsFold(def, routine) {
+			t.Errorf("routine definition does not name %q:\n%s", routine, def)
+		}
+		if _, err := x.RoutineDefinition(ctx, h.Schema, routine+"_missing"); err == nil {
+			t.Errorf("RoutineDefinition of a missing routine should fail")
 		}
 	})
 }

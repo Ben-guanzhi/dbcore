@@ -6,6 +6,7 @@ package oracle
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dbcore/dbcore"
 	"github.com/dbcore/dbcore/sqltext"
@@ -97,6 +98,39 @@ func (d *OracleDriver) Routines(ctx context.Context, schema string) ([]dbcore.Ro
 		out = append(out, dbcore.RoutineInfo{Name: r[0].S, Kind: r[1].S})
 	}
 	return out, nil
+}
+
+// RoutineDefinition reassembles ALL_SOURCE (one line per row) into the routine's
+// source and puts the CREATE OR REPLACE header back in front of it.
+func (d *OracleDriver) RoutineDefinition(ctx context.Context, schema, name string) (string, error) {
+	s, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return "", err
+	}
+	q, a, err := sqltext.RoutineDefinitionQuery("oracle", s, name, "")
+	if err != nil {
+		return "", err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, r := range res.Rows {
+		if r[0].Kind != dbcore.ValText {
+			continue
+		}
+		b.WriteString(strings.TrimRight(r[0].S, " \t\r\n"))
+		b.WriteString("\n")
+	}
+	source := strings.TrimSpace(b.String())
+	if source == "" {
+		return "", fmt.Errorf("oracle: routine %q not found", name)
+	}
+	if !strings.HasPrefix(strings.ToUpper(source), "CREATE") {
+		source = "CREATE OR REPLACE " + source
+	}
+	return source, nil
 }
 
 var _ dbcore.ExtraMetadataReader = (*OracleDriver)(nil)

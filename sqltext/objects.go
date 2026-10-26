@@ -200,3 +200,56 @@ func objectName(schema, name string) string {
 	}
 	return schema + "." + name
 }
+
+// RoutineKindQuery returns the query and args answering one routine's kind
+// (FUNCTION or PROCEDURE). MySQL is the only engine whose definition statement
+// depends on it (SHOW CREATE PROCEDURE vs SHOW CREATE FUNCTION); every other
+// engine answers ErrNotSupported and the driver skips the lookup.
+func RoutineKindQuery(dbType, schema, name string) (string, []interface{}, error) {
+	if Normalize(dbType) != MySQL {
+		return "", nil, fmt.Errorf("sqltext: engine %q does not need a routine kind lookup", dbType)
+	}
+	return `SELECT ROUTINE_TYPE FROM information_schema.ROUTINES
+		WHERE ROUTINE_SCHEMA = ? AND ROUTINE_NAME = ?`,
+		[]interface{}{schema, name}, nil
+}
+
+// RoutineDefinitionQuery returns the query and args producing a routine's
+// definition: one row per definition (PostgreSQL answers one per overload).
+// kind disambiguates MySQL's two SHOW CREATE statements and is ignored
+// elsewhere.
+func RoutineDefinitionQuery(dbType, schema, name, kind string) (string, []interface{}, error) {
+	switch Normalize(dbType) {
+	case MySQL:
+		stmt := "SHOW CREATE PROCEDURE "
+		if strings.EqualFold(kind, "FUNCTION") {
+			stmt = "SHOW CREATE FUNCTION "
+		}
+		quoted, err := QuoteIdent(dbType, name)
+		if err != nil {
+			return "", nil, err
+		}
+		return stmt + quoted, nil, nil
+	case Postgres:
+		// pg_get_functiondef renders CREATE OR REPLACE for one overload; the
+		// driver joins the rows when a name has several signatures.
+		return `SELECT pg_get_functiondef(p.oid)
+			FROM pg_proc p
+			INNER JOIN pg_namespace n ON n.oid = p.pronamespace
+			WHERE n.nspname = $1 AND p.proname = $2
+			ORDER BY p.oid`,
+			[]interface{}{schema, name}, nil
+	case SQLServer:
+		return fmt.Sprintf(`SELECT OBJECT_DEFINITION(OBJECT_ID(%s))`,
+			QuotedLiteral(SQLServer, objectName(schema, name))), nil, nil
+	case Oracle:
+		// ALL_SOURCE holds the source one line per row, starting at the
+		// "PROCEDURE name ..." header; the driver joins and prefixes CREATE OR
+		// REPLACE.
+		return fmt.Sprintf(`SELECT TEXT FROM ALL_SOURCE
+			WHERE OWNER = %s AND NAME = %s AND TYPE IN ('PROCEDURE', 'FUNCTION')
+			ORDER BY TYPE, LINE`,
+			QuotedLiteral(Oracle, upperASCII(schema)), QuotedLiteral(Oracle, upperASCII(name))), nil, nil
+	}
+	return "", nil, fmt.Errorf("sqltext: engine %q has no stored routines", dbType)
+}

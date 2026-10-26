@@ -47,4 +47,9 @@ func (d *SQLiteDriver) Routines(ctx context.Context, schema string) ([]dbcore.Ro
 	return nil, dbcore.ErrNotSupported
 }
 
+// RoutineDefinition is not supported for the same reason as Routines.
+func (d *SQLiteDriver) RoutineDefinition(ctx context.Context, schema, name string) (string, error) {
+	return "", dbcore.ErrNotSupported
+}
+
 var _ dbcore.ExtraMetadataReader = (*SQLiteDriver)(nil)

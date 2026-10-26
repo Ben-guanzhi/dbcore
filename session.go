@@ -241,6 +241,13 @@ type ExtraMetadataReader interface {
 	Sequences(ctx context.Context, schema string) ([]SequenceInfo, error)
 	// Routines lists one schema's functions and procedures in name order.
 	Routines(ctx context.Context, schema string) ([]RoutineInfo, error)
+	// RoutineDefinition returns the DDL that recreates a routine: complete
+	// CREATE text where the engine stores it (SQL Server OBJECT_DEFINITION,
+	// MySQL SHOW CREATE, Oracle ALL_SOURCE composed with its header) and
+	// pg_get_functiondef for PostgreSQL. PostgreSQL keeps one definition per
+	// overload, so those are joined by a blank line; the other engines answer
+	// one. SQLite has no stored routines.
+	RoutineDefinition(ctx context.Context, schema, name string) (string, error)
 }
 
 // AsExtraMetadata is the capability assertion helper, matching AsSQLTx and

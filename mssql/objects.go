@@ -6,6 +6,7 @@ package mssql
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dbcore/dbcore"
 	"github.com/dbcore/dbcore/sqltext"
@@ -94,6 +95,28 @@ func (d *MSSQLDriver) Routines(ctx context.Context, schema string) ([]dbcore.Rou
 		out = append(out, dbcore.RoutineInfo{Name: r[0].S, Kind: r[1].S})
 	}
 	return out, nil
+}
+
+// RoutineDefinition returns the stored CREATE text (OBJECT_DEFINITION), which
+// SQL Server keeps verbatim for procedures and functions.
+func (d *MSSQLDriver) RoutineDefinition(ctx context.Context, schema, name string) (string, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return "", err
+	}
+	q, a, err := sqltext.RoutineDefinitionQuery("sqlserver", schema, name, "")
+	if err != nil {
+		return "", err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return "", err
+	}
+	if len(res.Rows) == 0 || len(res.Rows[0]) == 0 || res.Rows[0][0].Kind != dbcore.ValText ||
+		strings.TrimSpace(res.Rows[0][0].S) == "" {
+		return "", fmt.Errorf("mssql: routine %q not found", name)
+	}
+	return res.Rows[0][0].S, nil
 }
 
 var _ dbcore.ExtraMetadataReader = (*MSSQLDriver)(nil)

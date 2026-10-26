@@ -7,6 +7,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/dbcore/dbcore"
 	"github.com/dbcore/dbcore/sqltext"
@@ -97,6 +98,34 @@ func (d *PostgresDriver) Routines(ctx context.Context, schema string) ([]dbcore.
 		out = append(out, dbcore.RoutineInfo{Name: r[0].S, Kind: r[1].S})
 	}
 	return out, nil
+}
+
+// RoutineDefinition returns pg_get_functiondef for every overload of name,
+// joined by a blank line (PostgreSQL allows several functions with one name).
+func (d *PostgresDriver) RoutineDefinition(ctx context.Context, schema, name string) (string, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return "", err
+	}
+	// The kind is not needed: pg_get_functiondef renders it.
+	q, a, err := sqltext.RoutineDefinitionQuery("postgresql", schema, name, "")
+	if err != nil {
+		return "", err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		if r[0].Kind == dbcore.ValText && strings.TrimSpace(r[0].S) != "" {
+			parts = append(parts, strings.TrimRight(r[0].S, "\n"))
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("postgres: routine %q not found", name)
+	}
+	return strings.Join(parts, "\n\n"), nil
 }
 
 var _ dbcore.ExtraMetadataReader = (*PostgresDriver)(nil)

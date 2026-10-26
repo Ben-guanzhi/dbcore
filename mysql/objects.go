@@ -84,4 +84,44 @@ func (d *MySQLDriver) Routines(ctx context.Context, schema string) ([]dbcore.Rou
 	return out, nil
 }
 
+// RoutineDefinition returns SHOW CREATE PROCEDURE/FUNCTION text. MySQL has two
+// different SHOW statements, so the routine's kind is read from
+// information_schema first.
+func (d *MySQLDriver) RoutineDefinition(ctx context.Context, schema, name string) (string, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return "", err
+	}
+	kind := dbcore.RoutineProcedure
+	kq, ka, err := sqltext.RoutineKindQuery("mysql", schema, name)
+	if err != nil {
+		return "", err
+	}
+	if kres, kerr := dbcore.RunQuery(ctx, d.db, kq, dbcore.ValuesOf(ka)); kerr == nil && len(kres.Rows) > 0 {
+		if kres.Rows[0][0].S != "" {
+			kind = kres.Rows[0][0].S
+		}
+	}
+	q, a, err := sqltext.RoutineDefinitionQuery("mysql", schema, name, kind)
+	if err != nil {
+		return "", err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return "", err
+	}
+	if len(res.Rows) == 0 || len(res.Rows[0]) < 3 {
+		return "", fmt.Errorf("mysql: routine %q not found", name)
+	}
+	// SHOW CREATE returns (name, sql_mode, Create <kind>, ...); the definition
+	// column arrives as text or bytes depending on the server's column type.
+	switch v := res.Rows[0][2]; v.Kind {
+	case dbcore.ValText:
+		return v.S, nil
+	case dbcore.ValBlob:
+		return string(v.B), nil
+	}
+	return "", fmt.Errorf("mysql: routine %q has no readable definition", name)
+}
+
 var _ dbcore.ExtraMetadataReader = (*MySQLDriver)(nil)
