@@ -437,7 +437,7 @@ func (l OracleDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRow
 	b.WriteString("SELECT * FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))
 	args := l.appendWhere(&b, req)
-	args = append(args, dbcore.AppendKeyset(&b, l, req, len(args) > 0)...)
+	args = append(args, dbcore.AppendKeyset(&b, l, req, len(args))...)
 	dbcore.AppendSortLimit(&b, l, req)
 	return b.String(), args
 }

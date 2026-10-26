@@ -187,6 +187,45 @@ func (h Harness) runCatalogDetailContract(t *testing.T, ctx context.Context, drv
 			t.Fatalf("page 2 ids = %v, want [1002 1001]", got)
 		}
 	})
+
+	t.Run("browse_keyset_filter", func(t *testing.T) {
+		// Seek past a known row while two filters are active. The cursor
+		// parameter must land AFTER the filters' positions: reusing $1 made
+		// PostgreSQL reject the whole page ("integer > text"), and the "?"
+		// dialects hide that mistake, so only this case catches a regression.
+		// SQL Server's BrowseRows has no keyset path yet (its OFFSET/FETCH
+		// paging is the status quo), so it is skipped by kind.
+		if h.kind() == dbcore.KindMSSQL {
+			t.Skip("mssql BrowseRows keeps OFFSET paging")
+		}
+		// Self-contained rows (a distinct name pattern): a client running one
+		// subtest in isolation must get the same verdict as the full suite.
+		for i := 0; i < 5; i++ {
+			if _, err := drv.Execute(ctx,
+				fmt.Sprintf("INSERT INTO %s(id,name) VALUES (%s,%s)", table, h.Placeholder(1), h.Placeholder(2)),
+				dbcore.Value{Kind: dbcore.ValInt, I: 1200 + int64(i)},
+				dbcore.Value{Kind: dbcore.ValText, S: fmt.Sprintf("ks%d", i)},
+			); err != nil {
+				t.Fatalf("seed keyset row: %v", err)
+			}
+		}
+		req := &dbcore.TableRowsRequest{
+			PageSize: 2,
+			Sort:     []dbcore.SortKey{{Column: h.foldCol("id"), Desc: true}},
+			Filter: []dbcore.FilterExpr{
+				{Column: h.foldCol("name"), Op: dbcore.FilterLike, Value: dbcore.Value{Kind: dbcore.ValText, S: "ks%"}},
+				{Column: h.foldCol("id"), Op: dbcore.FilterGte, Value: dbcore.Value{Kind: dbcore.ValInt, I: 0}},
+			},
+			After: []dbcore.Value{{Kind: dbcore.ValInt, I: 1203}},
+		}
+		res, err := drv.BrowseRows(ctx, h.Schema, table, req)
+		if err != nil {
+			t.Fatalf("BrowseRows (keyset + filter): %v", err)
+		}
+		if got := intCells(res.Rows, 0); len(got) != 2 || got[0] != 1202 || got[1] != 1201 {
+			t.Fatalf("seek page ids = %v, want [1202 1201] (DESC after 1203)", got)
+		}
+	})
 }
 
 // runExtraMetadataContract asserts the P3-4 surface: view DDL, CHECK

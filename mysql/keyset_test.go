@@ -19,7 +19,7 @@ func TestAppendKeyset(t *testing.T) {
 		Sort:  []dbcore.SortKey{{Column: "id"}},
 		After: []dbcore.Value{{Kind: dbcore.ValInt, I: 42}},
 	}
-	args := dbcore.AppendKeyset(&b, l, req, false)
+	args := dbcore.AppendKeyset(&b, l, req, 0)
 	if len(args) != 1 || args[0].I != 42 {
 		t.Fatalf("args = %v", args)
 	}
@@ -27,7 +27,8 @@ func TestAppendKeyset(t *testing.T) {
 		t.Fatalf("no-filter keyset = %q", b.String())
 	}
 
-	// Filters first: the keyset joins with AND.
+	// Filters first: the keyset joins with AND. MySQL's "?" repeats, so the
+	// argument count is what matters here.
 	req2 := &dbcore.TableRowsRequest{
 		Sort:   []dbcore.SortKey{{Column: "id", Desc: true}},
 		After:  []dbcore.Value{{Kind: dbcore.ValInt, I: 7}},
@@ -36,7 +37,7 @@ func TestAppendKeyset(t *testing.T) {
 	var b2 strings.Builder
 	b2.WriteString("SELECT * FROM ")
 	b2.WriteString(l.QuoteIdent("shop", "orders"))
-	if args := dbcore.AppendKeyset(&b2, l, req2, true); len(args) != 1 {
+	if args := dbcore.AppendKeyset(&b2, l, req2, 1); len(args) != 1 {
 		t.Fatalf("args = %v", args)
 	}
 	if !strings.Contains(b2.String(), " AND `id` < ?") {
@@ -49,7 +50,7 @@ func TestAppendKeyset(t *testing.T) {
 		After: []dbcore.Value{{Kind: dbcore.ValInt, I: 1}, {Kind: dbcore.ValInt, I: 2}},
 	}
 	var b3 strings.Builder
-	if got := dbcore.AppendKeyset(&b3, l, req3, false); got != nil {
+	if got := dbcore.AppendKeyset(&b3, l, req3, 0); got != nil {
 		t.Fatalf("multi-key should degrade, got %v", got)
 	}
 }

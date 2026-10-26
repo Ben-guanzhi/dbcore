@@ -178,13 +178,16 @@ func isIdentChar(c byte) bool {
 // AppendKeyset appends the keyset continuation predicate (single sort key:
 // k > v with a dialect placeholder) and returns the bound args. Multi-key
 // sorts degrade to OFFSET silently-but-safely: the page is still correct,
-// just not seek-fast. whereWritten tells it whether the statement already has
-// a WHERE (filters), so the predicate joins with AND.
-func AppendKeyset(b *strings.Builder, d Dialect, req *TableRowsRequest, whereWritten bool) []Value {
+// just not seek-fast. existingArgs is the number of parameters the statement
+// already carries (the filter values): the continuation binds at the NEXT
+// position. Passing it is not bookkeeping pedantry — positional dialects
+// ($1… in PostgreSQL) mis-type a reused number ("integer > text" on a real
+// instance), while the "?" dialects hide the bug entirely.
+func AppendKeyset(b *strings.Builder, d Dialect, req *TableRowsRequest, existingArgs int) []Value {
 	if len(req.After) == 0 || len(req.Sort) != 1 || len(req.After) != 1 {
 		return nil
 	}
-	if whereWritten {
+	if existingArgs > 0 {
 		b.WriteString(" AND ")
 	} else {
 		b.WriteString(" WHERE ")
@@ -195,7 +198,7 @@ func AppendKeyset(b *strings.Builder, d Dialect, req *TableRowsRequest, whereWri
 	} else {
 		b.WriteString(" > ")
 	}
-	b.WriteString(d.Placeholder(1))
+	b.WriteString(d.Placeholder(existingArgs + 1))
 	return []Value{req.After[0]}
 }
 
