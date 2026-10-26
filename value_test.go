@@ -15,13 +15,13 @@ func TestValueForColumnParsesOracleNumber(t *testing.T) {
 	if got := valueForColumn("not-a-number", "NUMBER"); got.Kind != ValText || got.S != "not-a-number" {
 		t.Errorf(`valueForColumn("not-a-number", "NUMBER") = %+v, want text passthrough`, got)
 	}
-	if got := valueForColumn("123456789012345678901234567890", "NUMBER"); got.Kind != ValText {
-		t.Errorf("out-of-range NUMBER = %+v, want text to preserve digits", got)
+	if got := valueForColumn("123456789012345678901234567890", "NUMBER"); got.Kind != ValDecimal || got.S != "123456789012345678901234567890" {
+		t.Errorf("out-of-range NUMBER = %+v, want decimal to preserve digits", got)
 	}
 	// go-ora hands NUMBER over as its decimal text; a fraction float64 cannot
 	// reproduce keeps every digit as text instead of rounding it away.
-	if got := valueForColumn("1.234567890123456789", "NUMBER"); got.Kind != ValText || got.S != "1.234567890123456789" {
-		t.Errorf("long fraction NUMBER = %+v, want text to preserve digits", got)
+	if got := valueForColumn("1.234567890123456789", "NUMBER"); got.Kind != ValDecimal || got.S != "1.234567890123456789" {
+		t.Errorf("long fraction NUMBER = %+v, want decimal to preserve digits", got)
 	}
 	if got := valueForColumn("2.0", "NUMBER"); got.Kind != ValFloat || got.F != 2 {
 		t.Errorf(`valueForColumn("2.0", "NUMBER") = %+v, want ValFloat 2`, got)
@@ -85,20 +85,69 @@ func TestValueOf(t *testing.T) {
 	}
 }
 
-// MySQL's driver scans exact numerics (DECIMAL/NUMERIC) as []byte; without the
-// text-type mapping they surface as "<blob N bytes>" in every consumer grid.
-func TestValueForColumnDecimalIsText(t *testing.T) {
+// MySQL's driver scans exact numerics (DECIMAL/NUMERIC) as []byte. P3-2 routes
+// them to ValDecimal: the digit text stays the value (a float64 would move the
+// point, an int64 overflows), the kind says "number" so grids sort and sum
+// numerically, and helpers convert losslessly or not at all.
+func TestValueForColumnDecimalIsExact(t *testing.T) {
 	v := valueForColumn([]byte("123.45"), "DECIMAL")
-	if v.Kind != ValText || v.S != "123.45" {
-		t.Fatalf("got %v, want text 123.45", v)
+	if v.Kind != ValDecimal || v.S != "123.45" {
+		t.Fatalf("got %v, want decimal 123.45", v)
+	}
+	if v.String() != "123.45" {
+		t.Errorf("String() = %q, want the digits verbatim", v.String())
+	}
+	if got, ok := DecimalToInt64(v); ok {
+		t.Errorf("123.45 must not convert to int64 (got %d)", got)
+	}
+	// 123.45 is NOT representable as a float64, so the losslessness guard must
+	// refuse — that refusal is the whole point of ValDecimal existing.
+	if got, ok := DecimalToFloat64(v); ok {
+		t.Errorf("DecimalToFloat64(123.45) = %v, want refused (a double rounds it)", got)
+	}
+	exact := DecimalValue("0.5") // 0.5 is exact in binary
+	if got, ok := DecimalToFloat64(exact); !ok || got != 0.5 {
+		t.Errorf("DecimalToFloat64(0.5) = %v, %v, want exact float", got, ok)
 	}
 	v = valueForColumn([]byte("10"), "NUMERIC")
-	if v.Kind != ValText || v.S != "10" {
-		t.Fatalf("got %v, want text 10", v)
+	if v.Kind != ValDecimal || v.S != "10" {
+		t.Fatalf("got %v, want decimal 10", v)
+	}
+	if n, ok := DecimalToInt64(v); !ok || n != 10 {
+		t.Errorf("DecimalToInt64(10) = %d, %v, want 10", n, ok)
+	}
+	// A decimal past int64 stays lossless: no float, no int, only digits.
+	big := valueForColumn([]byte("99999999999999999999.5"), "DECIMAL")
+	if big.Kind != ValDecimal {
+		t.Fatalf("big decimal = %+v, want ValDecimal", big)
+	}
+	if _, ok := DecimalToInt64(big); ok {
+		t.Errorf("a 20-digit decimal must not convert to int64")
+	}
+	if _, ok := DecimalToFloat64(big); ok {
+		t.Errorf("a 21-digit decimal must not convert to float64")
 	}
 	// A real blob stays a blob.
 	v = valueForColumn([]byte{0x00, 0x01}, "BLOB")
 	if v.Kind != ValBlob {
 		t.Fatalf("blob degraded to %v", v.Kind)
+	}
+	// Garbage in a decimal column is not invented into a number.
+	v = valueForColumn([]byte("--not-a-number--"), "DECIMAL")
+	if v.Kind != ValText {
+		t.Fatalf("unparseable decimal = %v, want text passthrough", v.Kind)
+	}
+}
+
+// IntFrom accepts an integral decimal: contracts and keyset cursors that read
+// integers through it keep working when a driver delivers DECIMAL(10,0)-style
+// columns as exact decimals.
+func TestIntFromAcceptsIntegralDecimal(t *testing.T) {
+	v := valueForColumn([]byte("42"), "DECIMAL")
+	if n, ok := IntFrom(v); !ok || n != 42 {
+		t.Errorf("IntFrom(decimal 42) = %d, %v, want 42", n, ok)
+	}
+	if _, ok := IntFrom(valueForColumn([]byte("4.5"), "DECIMAL")); ok {
+		t.Errorf("IntFrom(4.5) must refuse")
 	}
 }

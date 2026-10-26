@@ -208,6 +208,8 @@ func EncodeValue(v dbcore.Value) CellPayload {
 		return CellPayload{Kind: "bool", Bool: v.Bool}
 	case dbcore.ValTime:
 		return CellPayload{Kind: "time", Time: v.T.UTC().Format(timeFormat)}
+	case dbcore.ValDecimal:
+		return CellPayload{Kind: "decimal", Text: v.S}
 	default:
 		return CellPayload{Kind: "null"}
 	}
@@ -239,6 +241,8 @@ func DecodeValue(c CellPayload) (dbcore.Value, error) {
 			return dbcore.Value{}, fmt.Errorf("plugindriver: bad time %q: %w", c.Time, err)
 		}
 		return dbcore.Value{Kind: dbcore.ValTime, T: t}, nil
+	case "decimal":
+		return dbcore.Value{Kind: dbcore.ValDecimal, S: c.Text}, nil
 	}
 	return dbcore.Value{}, fmt.Errorf("plugindriver: unknown cell kind %q", c.Kind)
 }
