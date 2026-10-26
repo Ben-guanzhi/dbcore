@@ -60,3 +60,29 @@ func TestTriggerDefinitionQueryByEngine(t *testing.T) {
 		t.Fatalf("oracle: %v %q", err, q)
 	}
 }
+
+// PostgreSQL's information_schema.TRIGGERS spells the event column
+// EVENT_MANIPULATION (singular, one row per event) and has no STATUS column.
+// Using MySQL's names here made every PG trigger list fail on the server, and
+// pg_get_triggerdef already renders "CREATE TRIGGER …" so prefixing it
+// duplicated the header. Both are pinned so the shape cannot drift back.
+func TestPostgresTriggerRecipesUsePostgresCatalog(t *testing.T) {
+	q, _, err := TriggersQuery("postgresql", "public", "orders")
+	if err != nil {
+		t.Fatalf("TriggersQuery: %v", err)
+	}
+	if strings.Contains(q, "EVENT_OBJECT_MANIPULATION") || strings.Contains(q, "STATUS") {
+		t.Errorf("PG trigger list uses MySQL column names:\n%s", q)
+	}
+	if !strings.Contains(q, "EVENT_MANIPULATION") {
+		t.Errorf("PG trigger list misses EVENT_MANIPULATION:\n%s", q)
+	}
+
+	q, _, err = TriggerDefinitionQuery("postgresql", "public", "orders_t")
+	if err != nil {
+		t.Fatalf("TriggerDefinitionQuery: %v", err)
+	}
+	if strings.Contains(q, "'CREATE TRIGGER '") {
+		t.Errorf("PG trigger definition prefixes pg_get_triggerdef output:\n%s", q)
+	}
+}

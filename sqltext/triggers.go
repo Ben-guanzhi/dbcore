@@ -41,9 +41,12 @@ func TriggersQuery(dbType, schema, table string) (string, []interface{}, error) 
 			WHERE TRIGGER_SCHEMA = ? AND EVENT_OBJECT_TABLE = ? ORDER BY TRIGGER_NAME`,
 			[]interface{}{schema, table}, nil
 	case Postgres:
-		return `SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_OBJECT_MANIPULATION, ''
+		// PostgreSQL's information_schema.TRIGGERS has EVENT_MANIPULATION
+		// (singular, one row per event) and no STATUS column: that shape is
+		// MySQL's, and using it here made every PG trigger list fail.
+		return `SELECT TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ''
 			FROM information_schema.TRIGGERS
-			WHERE TRIGGER_SCHEMA = $1 AND EVENT_OBJECT_TABLE = $2 ORDER BY TRIGGER_NAME`,
+			WHERE TRIGGER_SCHEMA = $1 AND EVENT_OBJECT_TABLE = $2 ORDER BY TRIGGER_NAME, EVENT_MANIPULATION`,
 			[]interface{}{schema, table}, nil
 	case SQLServer:
 		// Same shape SearchObjectsQuery uses for tiberius-based clients:
@@ -80,7 +83,10 @@ func TriggerDefinitionQuery(dbType, schema, trigger string) (string, []interface
 		}
 		return "SHOW CREATE TRIGGER " + q, nil, nil
 	case Postgres:
-		return `SELECT 'CREATE TRIGGER ' || tgname || ' ' || pg_get_triggerdef(oid)
+		// pg_get_triggerdef already renders the whole "CREATE TRIGGER ..."
+		// statement, so prefixing it (as this did before) produced
+		// "CREATE TRIGGER x CREATE TRIGGER x ...".
+		return `SELECT pg_get_triggerdef(oid)
 			FROM pg_trigger WHERE tgname = $1 AND NOT tgisinternal`,
 			[]interface{}{trigger}, nil
 	case SQLServer:
