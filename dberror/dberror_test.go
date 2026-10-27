@@ -12,7 +12,7 @@ import (
 // wording and hit every constraint class.
 type fakePgError struct{ state string }
 
-func (e fakePgError) Error() string { return "ERROR: " + e.state }
+func (e fakePgError) Error() string    { return "ERROR: " + e.state }
 func (e fakePgError) SQLState() string { return e.state }
 
 func TestClassifySQLState(t *testing.T) {

@@ -120,48 +120,48 @@ type pattern struct {
 // first: a deadlock that also says "duplicate" must classify as a deadlock.
 var patterns = []pattern{
 	// Deadlock / serialization before generic constraint words.
-	{Deadlock, []string{"DEADLOCK"}},                                         // PG 40P01, MySQL 1213, MSSQL 1205, Oracle ORA-00060
-	{Deadlock, []string{"LOCK WAIT TIMEOUT"}},                                // MySQL 1205
-	{Deadlock, []string{"DATABASE IS LOCKED"}},                               // SQLite busy
-	{SerializationFailure, []string{"COULD NOT SERIALIZE"}},                  // PG
-	{SerializationFailure, []string{"ORA-08177"}},                            // Oracle
+	{Deadlock, []string{"DEADLOCK"}},                                           // PG 40P01, MySQL 1213, MSSQL 1205, Oracle ORA-00060
+	{Deadlock, []string{"LOCK WAIT TIMEOUT"}},                                  // MySQL 1205
+	{Deadlock, []string{"DATABASE IS LOCKED"}},                                 // SQLite busy
+	{SerializationFailure, []string{"COULD NOT SERIALIZE"}},                    // PG
+	{SerializationFailure, []string{"ORA-08177"}},                              // Oracle
 	{SerializationFailure, []string{"SNAPSHOT ISOLATION TRANSACTION ABORTED"}}, // MSSQL RCSI conflict
 
 	// Connection health.
-	{ConnectionBroken, []string{"SERVER HAS GONE AWAY"}},        // MySQL 2006
-	{ConnectionBroken, []string{"LOST CONNECTION"}},             // MySQL 2013
-	{ConnectionBroken, []string{"CONNECTION REFUSED"}},          // dial failures, every engine
+	{ConnectionBroken, []string{"SERVER HAS GONE AWAY"}},         // MySQL 2006
+	{ConnectionBroken, []string{"LOST CONNECTION"}},              // MySQL 2013
+	{ConnectionBroken, []string{"CONNECTION REFUSED"}},           // dial failures, every engine
 	{ConnectionBroken, []string{"SERVER CLOSED THE CONNECTION"}}, // pgx
-	{ConnectionBroken, []string{"TERMINATING CONNECTION"}},      // PG
-	{ConnectionBroken, []string{"ORA-03113"}},                   // Oracle end-of-file on channel
-	{ConnectionBroken, []string{"ORA-03114"}},                   // Oracle not connected
-	{ConnectionBroken, []string{"ORA-12545"}},                   // Oracle connect failed
-	{ConnectionBroken, []string{"NOT LOGGED ON"}},               // Oracle ORA-01012
-	{ConnectionBroken, []string{"BROKEN PIPE"}},                 // socket level
-	{ConnectionBroken, []string{"BAD CONNECTION"}},              // driver.ErrBadConn wording
+	{ConnectionBroken, []string{"TERMINATING CONNECTION"}},       // PG
+	{ConnectionBroken, []string{"ORA-03113"}},                    // Oracle end-of-file on channel
+	{ConnectionBroken, []string{"ORA-03114"}},                    // Oracle not connected
+	{ConnectionBroken, []string{"ORA-12545"}},                    // Oracle connect failed
+	{ConnectionBroken, []string{"NOT LOGGED ON"}},                // Oracle ORA-01012
+	{ConnectionBroken, []string{"BROKEN PIPE"}},                  // socket level
+	{ConnectionBroken, []string{"BAD CONNECTION"}},               // driver.ErrBadConn wording
 
 	// Constraint violations.
-	{UniqueViolation, []string{"DUPLICATE ENTRY"}},                                        // MySQL 1062
-	{UniqueViolation, []string{"ERROR 1062"}},                                             // MySQL, raw
-	{UniqueViolation, []string{"UNIQUE CONSTRAINT"}},                                      // PG wording, SQLite "UNIQUE constraint failed"
-	{UniqueViolation, []string{"VIOLATION OF UNIQUE KEY"}},                                // MSSQL 2627/2601
-	{UniqueViolation, []string{"CANNOT INSERT DUPLICATE KEY"}},                            // MSSQL 2601
-	{UniqueViolation, []string{"ORA-00001"}},                                              // Oracle unique
-	{UniqueViolation, []string{"CONSTRAINT", "PRIMARY KEY"}},                              // SQLite "PRIMARY KEY constraint failed", MSSQL PK
-	{ForeignKeyViolation, []string{"FOREIGN KEY CONSTRAINT"}},                             // PG/SQLite/MSSQL
-	{ForeignKeyViolation, []string{"ERROR 1451"}},                                         // MySQL delete parent
-	{ForeignKeyViolation, []string{"ERROR 1452"}},                                         // MySQL insert child
-	{ForeignKeyViolation, []string{"A FOREIGN KEY CONSTRAINT FAILS"}},                     // MySQL wording
-	{ForeignKeyViolation, []string{"ORA-02292"}},                                          // Oracle child record found
-	{ForeignKeyViolation, []string{"ORA-02270"}},                                          // Oracle no matching parent
-	{NotNullViolation, []string{"NOT NULL CONSTRAINT"}},                                   // SQLite
-	{NotNullViolation, []string{"NULL VALUE IN COLUMN"}},                                  // PG 23502 wording
-	{NotNullViolation, []string{"CANNOT BE NULL"}},                                        // MySQL 1048 / MSSQL
-	{NotNullViolation, []string{"INSERT THE VALUE NULL"}},                                 // MSSQL
-	{NotNullViolation, []string{"ORA-01400"}},                                             // Oracle cannot insert NULL
-	{CheckViolation, []string{"CHECK CONSTRAINT"}},                                        // SQLite/PG/MSSQL
-	{CheckViolation, []string{"CHECK CONSTRAINT IS VIOLATED"}},                            // MySQL 3819
-	{CheckViolation, []string{"ORA-02290"}},                                               // Oracle
+	{UniqueViolation, []string{"DUPLICATE ENTRY"}},                    // MySQL 1062
+	{UniqueViolation, []string{"ERROR 1062"}},                         // MySQL, raw
+	{UniqueViolation, []string{"UNIQUE CONSTRAINT"}},                  // PG wording, SQLite "UNIQUE constraint failed"
+	{UniqueViolation, []string{"VIOLATION OF UNIQUE KEY"}},            // MSSQL 2627/2601
+	{UniqueViolation, []string{"CANNOT INSERT DUPLICATE KEY"}},        // MSSQL 2601
+	{UniqueViolation, []string{"ORA-00001"}},                          // Oracle unique
+	{UniqueViolation, []string{"CONSTRAINT", "PRIMARY KEY"}},          // SQLite "PRIMARY KEY constraint failed", MSSQL PK
+	{ForeignKeyViolation, []string{"FOREIGN KEY CONSTRAINT"}},         // PG/SQLite/MSSQL
+	{ForeignKeyViolation, []string{"ERROR 1451"}},                     // MySQL delete parent
+	{ForeignKeyViolation, []string{"ERROR 1452"}},                     // MySQL insert child
+	{ForeignKeyViolation, []string{"A FOREIGN KEY CONSTRAINT FAILS"}}, // MySQL wording
+	{ForeignKeyViolation, []string{"ORA-02292"}},                      // Oracle child record found
+	{ForeignKeyViolation, []string{"ORA-02270"}},                      // Oracle no matching parent
+	{NotNullViolation, []string{"NOT NULL CONSTRAINT"}},               // SQLite
+	{NotNullViolation, []string{"NULL VALUE IN COLUMN"}},              // PG 23502 wording
+	{NotNullViolation, []string{"CANNOT BE NULL"}},                    // MySQL 1048 / MSSQL
+	{NotNullViolation, []string{"INSERT THE VALUE NULL"}},             // MSSQL
+	{NotNullViolation, []string{"ORA-01400"}},                         // Oracle cannot insert NULL
+	{CheckViolation, []string{"CHECK CONSTRAINT"}},                    // SQLite/PG/MSSQL
+	{CheckViolation, []string{"CHECK CONSTRAINT IS VIOLATED"}},        // MySQL 3819
+	{CheckViolation, []string{"ORA-02290"}},                           // Oracle
 }
 
 func (p pattern) match(text string) bool {
