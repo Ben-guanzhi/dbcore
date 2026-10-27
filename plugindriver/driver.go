@@ -299,6 +299,20 @@ func (d *Driver) Ping(ctx context.Context) error {
 	return err
 }
 
+// Dead reports whether the plugin process is gone: the host closed the driver,
+// the child exited, or its pipe broke (the read loop then fails every pending
+// call and records why). A dead driver answers every later call with an error;
+// a host that restarts plugins lazily checks this to reap the corpse instead
+// of retrying it forever.
+func (d *Driver) Dead() bool {
+	if d.closed.Load() {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.readErr != nil
+}
+
 // Close shuts the plugin down. It is idempotent and never blocks on a dead child.
 func (d *Driver) Close() error {
 	if d.closed.Swap(true) {

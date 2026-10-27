@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dbcore/dbcore"
 	"github.com/dbcore/dbcore/plugindriver"
@@ -129,6 +130,11 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 		}, "", "")
 	case plugindriver.MethodBrowseCount:
 		send(uint64(7), "", "")
+	case "exit":
+		// The crash path: answer first, then die — the host must observe the
+		// corpse instead of claiming the process is alive.
+		send(nil, "", "")
+		os.Exit(3)
 	case "stream":
 		// Three frames: columns first, rows next, counters in the terminal
 		// (Done) one — the shape Driver.CallStream walks.
@@ -443,5 +449,64 @@ func TestCallRawAndStreamThroughConnDriver(t *testing.T) {
 	// Bind still hands out the kernel's SQLDriver view of a connection.
 	if bound := conn.Bind("any", "db"); bound == nil {
 		t.Fatal("bind returned no driver view")
+	}
+}
+
+// TestConnDriverDeadAfterPluginExit pins the death signal: a plugin that exits
+// mid-session turns the driver dead — not just the one call that was in
+// flight — so a host can tell "restartable corpse" from "live process" without
+// probing it with a request.
+func TestConnDriverDeadAfterPluginExit(t *testing.T) {
+	binary := buildFakePlugin(t)
+	ctx := context.Background()
+
+	conn, err := plugindriver.StartConn(ctx, binary, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer conn.Close()
+	if conn.Dead() {
+		t.Fatal("a fresh driver reports dead")
+	}
+	if err := conn.Ping(ctx); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+
+	// The plugin answers this call and then exits: the reply lands, the
+	// process dies, and the host must notice within a bounded wait.
+	var exitAck interface{}
+	if err := conn.Call(ctx, "exit", nil, &exitAck); err != nil {
+		t.Fatalf("call exit: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !conn.Dead() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !conn.Dead() {
+		t.Fatal("driver still reports alive after the plugin exited")
+	}
+	if err := conn.Ping(ctx); err == nil {
+		t.Fatal("a ping on a dead driver must fail")
+	}
+
+	// The wide view of a connection on the dead process reports the same.
+	if !conn.Wide("c1", "db").Dead() {
+		t.Fatal("a wide view of a dead process reports alive")
+	}
+}
+
+// TestDriverDeadAfterClose covers the polite path: an explicitly closed driver
+// is dead the moment Close returns, not only once the child reaps.
+func TestDriverDeadAfterClose(t *testing.T) {
+	binary := buildFakePlugin(t)
+	drv, err := plugindriver.Start(context.Background(), binary, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := drv.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if !drv.Dead() {
+		t.Fatal("a closed driver reports alive")
 	}
 }

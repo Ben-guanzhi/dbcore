@@ -245,6 +245,10 @@ func (d *ConnDriver) callStreamConn(
 	return d.CallStream(ctx, fallback, params, onFrame, final)
 }
 
+// Dead reports whether the plugin process underneath is gone (see Driver.Dead).
+// A host that restarts plugins lazily consults this before every use.
+func (d *ConnDriver) Dead() bool { return d.proc.Dead() }
+
 // setInTx records the mirrored transaction state of one connection.
 func (d *ConnDriver) setInTx(connID string, value bool) {
 	d.mu.Lock()
@@ -294,6 +298,11 @@ func (c *Conn) Ping(ctx context.Context) error {
 func (c *Conn) Close() error                    { return c.driver.CloseConn(context.Background(), c.connID) }
 func (c *Conn) AsSQL() (dbcore.SQLDriver, bool) { return c, true }
 func (c *Conn) AsKV() (dbcore.KVDriver, bool)   { return nil, false }
+
+// Dead reports whether the plugin process this connection lives on is gone
+// (see Driver.Dead). The database connection died with the process; a host
+// that restarts plugins re-opens the connection instead of reusing this view.
+func (c *Conn) Dead() bool { return c.driver.Dead() }
 
 // CancelQuery stops every statement running on this connection (see
 // CancelConn). It is the wide-session surface's cancel: safe to call from
