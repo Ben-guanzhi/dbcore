@@ -195,6 +195,13 @@ func AddForeignKey(dbType, schema, table string, fk ForeignKey) string {
 	return "ALTER TABLE " + tableName(dbType, schema, table) + " " + foreignKeyClause(dbType, fk) + ";"
 }
 
+// CanAddForeignKey reports whether the engine can attach a foreign key to an
+// existing table. SQLite has no ALTER TABLE ... ADD CONSTRAINT at all, so a
+// new key there means rebuilding the table (see CanDropForeignKey).
+func CanAddForeignKey(dbType string) bool {
+	return sqltext.Normalize(dbType) != sqltext.SQLite
+}
+
 // DropForeignKey renders the removal of a foreign key constraint. MySQL names it
 // a FOREIGN KEY, the others a CONSTRAINT; SQLite cannot drop one at all, so
 // CanDropForeignKey is the caller's check.
