@@ -3,11 +3,14 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
@@ -563,5 +566,158 @@ func TestCapabilities(t *testing.T) {
 	}
 	if err := d.Ping(context.Background()); err != nil {
 		t.Errorf("Ping: %v", err)
+	}
+}
+
+func TestGetValueBoundedString(t *testing.T) {
+	ctx := context.Background()
+	d := newDriver(t)
+
+	// A short string is a full read: Total is its byte length, not truncated,
+	// and the Int convenience still parses.
+	if err := d.SetValue(ctx, "answer", dbcore.RedisValue{Type: dbcore.RedisStr, Int: 42}); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err := d.GetValueBounded(ctx, "answer", dbcore.RedisValueLimit{})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if got.Value.Str != "42" || got.Value.Int != 42 || got.Total != 2 || got.Truncated {
+		t.Fatalf("short string = %+v", got)
+	}
+
+	// A long ASCII string is cut at the limit with Total naming the whole.
+	long := strings.Repeat("a", 10000)
+	if err := d.SetValue(ctx, "long", dbcore.RedisValue{Type: dbcore.RedisStr, Str: long}); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err = d.GetValueBounded(ctx, "long", dbcore.RedisValueLimit{MaxStringBytes: 100})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !got.Truncated || got.Total != 10000 || got.Value.Str != strings.Repeat("a", 100) {
+		t.Fatalf("truncated string = len %d, total %d, truncated %v", len(got.Value.Str), got.Total, got.Truncated)
+	}
+
+	// A cut inside a multi-byte rune backs up to the rune boundary: the value
+	// stays valid text.
+	multibyte := strings.Repeat("é", 100) // 2 bytes each
+	if err := d.SetValue(ctx, "mb", dbcore.RedisValue{Type: dbcore.RedisStr, Str: multibyte}); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err = d.GetValueBounded(ctx, "mb", dbcore.RedisValueLimit{MaxStringBytes: 101})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !utf8.ValidString(got.Value.Str) || got.Value.Str != strings.Repeat("é", 50) {
+		t.Fatalf("multibyte cut = %d bytes, valid %v", len(got.Value.Str), utf8.ValidString(got.Value.Str))
+	}
+
+	if _, err := d.GetValueBounded(ctx, "missing", dbcore.RedisValueLimit{}); err == nil {
+		t.Fatal("GetValueBounded(missing) should fail")
+	}
+}
+
+func TestGetValueBoundedCollections(t *testing.T) {
+	ctx := context.Background()
+	d := newDriver(t)
+
+	// List: the window comes back by rank, Total is LLEN.
+	items := make([]string, 50)
+	for i := range items {
+		items[i] = fmt.Sprintf("item%02d", i)
+	}
+	if err := d.SetValue(ctx, "list", dbcore.RedisValue{Type: dbcore.RedisList, Items: items}); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err := d.GetValueBounded(ctx, "list", dbcore.RedisValueLimit{MaxEntries: 10})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !got.Truncated || got.Total != 50 || len(got.Value.Items) != 10 ||
+		got.Value.Items[0] != "item00" || got.Value.Items[9] != "item09" {
+		t.Fatalf("list window = %+v", got)
+	}
+
+	// ZSet: rank order with scores, Total is ZCARD.
+	zs := dbcore.RedisValue{Type: dbcore.RedisZSet}
+	for i := 0; i < 20; i++ {
+		zs.Items = append(zs.Items, fmt.Sprintf("z%02d", i))
+		zs.Scores = append(zs.Scores, float64(i))
+	}
+	if err := d.SetValue(ctx, "zset", zs); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err = d.GetValueBounded(ctx, "zset", dbcore.RedisValueLimit{MaxEntries: 5})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !got.Truncated || got.Total != 20 || len(got.Value.Items) != 5 ||
+		got.Value.Items[0] != "z00" || got.Value.Scores[4] != 4 {
+		t.Fatalf("zset window = %+v", got)
+	}
+
+	// Hash: HSCAN window, Total is HLEN.
+	hash := dbcore.RedisValue{Type: dbcore.RedisHash, Hash: map[string]string{}}
+	for i := 0; i < 30; i++ {
+		hash.Hash[fmt.Sprintf("f%02d", i)] = "v"
+	}
+	if err := d.SetValue(ctx, "hash", hash); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err = d.GetValueBounded(ctx, "hash", dbcore.RedisValueLimit{MaxEntries: 7})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !got.Truncated || got.Total != 30 || len(got.Value.Hash) != 7 {
+		t.Fatalf("hash window = %d fields, total %d, truncated %v", len(got.Value.Hash), got.Total, got.Truncated)
+	}
+
+	// Set: deduplicated window, Total is SCARD.
+	set := dbcore.RedisValue{Type: dbcore.RedisSet}
+	for i := 0; i < 25; i++ {
+		set.Items = append(set.Items, fmt.Sprintf("m%02d", i))
+	}
+	if err := d.SetValue(ctx, "set", set); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	got, err = d.GetValueBounded(ctx, "set", dbcore.RedisValueLimit{MaxEntries: 6})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !got.Truncated || got.Total != 25 || len(got.Value.Items) != 6 {
+		t.Fatalf("set window = %d members, total %d, truncated %v", len(got.Value.Items), got.Total, got.Truncated)
+	}
+	seen := map[string]bool{}
+	for _, m := range got.Value.Items {
+		if seen[m] {
+			t.Fatalf("duplicate member %q in bounded set window", m)
+		}
+		seen[m] = true
+	}
+
+	// Stream: the entries come back by ID, Total is XLEN.
+	for i := 0; i < 12; i++ {
+		if _, err := d.AppendRow(ctx, dbcore.RedisRow{
+			Key: "stream", Kind: dbcore.RedisStream, Fields: []dbcore.RedisField{{Name: "n", Value: strconv.Itoa(i)}},
+		}); err != nil {
+			t.Fatalf("AppendRow: %v", err)
+		}
+	}
+	got, err = d.GetValueBounded(ctx, "stream", dbcore.RedisValueLimit{MaxEntries: 4})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if !got.Truncated || got.Total != 12 || len(got.Value.Stream) != 4 {
+		t.Fatalf("stream window = %d entries, total %d, truncated %v", len(got.Value.Stream), got.Total, got.Truncated)
+	}
+
+	// A limit above the collection size is a full read: not truncated.
+	got, err = d.GetValueBounded(ctx, "list", dbcore.RedisValueLimit{MaxEntries: 100})
+	if err != nil {
+		t.Fatalf("GetValueBounded: %v", err)
+	}
+	if got.Truncated || got.Total != 50 || len(got.Value.Items) != 50 {
+		t.Fatalf("oversized limit = %+v", got)
 	}
 }

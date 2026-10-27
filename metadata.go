@@ -343,6 +343,52 @@ type KeyScanner interface {
 	ScanKeysEnriched(ctx context.Context, cursor uint64, pattern string, count int) (*EnrichedScanPage, error)
 }
 
+// RedisValueLimit bounds one BoundedValueReader.GetValueBounded read. A zero
+// field means "the driver's default" for that knob; there is no way to ask for
+// an unbounded read here — GetValue is the unbounded read.
+type RedisValueLimit struct {
+	// MaxStringBytes cuts a string value at this many bytes (the cut backs up
+	// to a UTF-8 rune boundary). Collections ignore it.
+	MaxStringBytes int64
+	// MaxEntries caps how many entries of a collection come back (list items,
+	// set members, zset members, hash fields, stream entries).
+	MaxEntries int64
+}
+
+// The defaults a zero RedisValueLimit field resolves to. Both size a first
+// paint of the value grid, not a full read — a consumer that wants more of a
+// collection walks it with KeyPageReader instead.
+const (
+	DefaultMaxStringBytes int64 = 64 << 10 // 64 KiB
+	DefaultMaxEntries     int64 = 1000
+)
+
+// BoundedRedisValue is one GetValueBounded answer: the value up to the limit,
+// plus what a UI needs to say "truncated — N more below".
+type BoundedRedisValue struct {
+	// Value is the (possibly truncated) value, in the same shape GetValue
+	// returns. A truncated string's Int field is left unparsed: the text is
+	// not the whole value, so a number guess off it would be a lie.
+	Value RedisValue
+	// Total is the full size Value was cut from: a string's length in bytes
+	// (STRLEN), a collection's entry count (LLEN/SCARD/ZCARD/HLEN/XLEN).
+	Total int64
+	// Truncated reports whether Value was cut at the limit (Total > what
+	// Value holds).
+	Truncated bool
+}
+
+// BoundedValueReader is optionally implemented by KV drivers that can read a
+// key's value under a limit. It exists because GetValue is unbounded by
+// design: LRANGE 0 -1 on a million-member list, SMEMBERS on a set of the same
+// size, or a single half-gigabyte string all end the value grid before the
+// user sees a row. A driver that has it answers the first window of any key
+// in one call; the capability is optional in the KeyPageReader style, and a
+// consumer asserts it with AsBoundedValueReader and falls back to GetValue.
+type BoundedValueReader interface {
+	GetValueBounded(ctx context.Context, key string, limit RedisValueLimit) (BoundedRedisValue, error)
+}
+
 // Structured RESP reply kinds (TypedCommander).
 const (
 	RedisReplyKindNull       = "null"

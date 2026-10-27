@@ -452,4 +452,54 @@ func RunKV(t *testing.T, spec KVSpec) {
 			t.Fatalf("enriched scan missed %q", k)
 		}
 	})
+
+	t.Run("kv_bounded_value", func(t *testing.T) {
+		br, ok := dbcore.AsBoundedValueReader(kv)
+		if !ok {
+			t.Skip("driver does not implement BoundedValueReader")
+		}
+		// A list long enough to cut: the window comes back by rank, Total is
+		// the collection length, Truncated says more exist.
+		items := make([]string, 40)
+		for i := range items {
+			items[i] = fmt.Sprintf("item%02d", i)
+		}
+		k := key("bounded")
+		if err := kv.SetValue(ctx, k, dbcore.RedisValue{Type: dbcore.RedisList, Items: items}); err != nil {
+			t.Fatalf("SetValue: %v", err)
+		}
+		got, err := br.GetValueBounded(ctx, k, dbcore.RedisValueLimit{MaxEntries: 10})
+		if err != nil {
+			t.Fatalf("GetValueBounded: %v", err)
+		}
+		if !got.Truncated || got.Total != 40 || len(got.Value.Items) != 10 {
+			t.Fatalf("list window = %d items, total %d, truncated %v", len(got.Value.Items), got.Total, got.Truncated)
+		}
+		if got.Value.Items[0] != "item00" || got.Value.Items[9] != "item09" {
+			t.Fatalf("list window order = %q..%q", got.Value.Items[0], got.Value.Items[9])
+		}
+		// A limit above the size is a full read.
+		got, err = br.GetValueBounded(ctx, k, dbcore.RedisValueLimit{MaxEntries: 100})
+		if err != nil {
+			t.Fatalf("GetValueBounded(full): %v", err)
+		}
+		if got.Truncated || got.Total != 40 || len(got.Value.Items) != 40 {
+			t.Fatalf("oversized limit = %d items, total %d, truncated %v", len(got.Value.Items), got.Total, got.Truncated)
+		}
+		// A string cut lands on the byte limit with the whole length in Total.
+		if err := kv.SetValue(ctx, k, dbcore.RedisValue{Type: dbcore.RedisStr, Str: strings.Repeat("a", 5000)}); err != nil {
+			t.Fatalf("SetValue(str): %v", err)
+		}
+		got, err = br.GetValueBounded(ctx, k, dbcore.RedisValueLimit{MaxStringBytes: 100})
+		if err != nil {
+			t.Fatalf("GetValueBounded(str): %v", err)
+		}
+		if !got.Truncated || got.Total != 5000 || len(got.Value.Str) != 100 {
+			t.Fatalf("string cut = %d bytes, total %d, truncated %v", len(got.Value.Str), got.Total, got.Truncated)
+		}
+		// A missing key fails the same way GetValue does.
+		if _, err := br.GetValueBounded(ctx, prefix+"bounded-missing", dbcore.RedisValueLimit{}); err == nil {
+			t.Fatal("GetValueBounded(missing) should fail")
+		}
+	})
 }

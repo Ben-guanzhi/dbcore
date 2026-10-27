@@ -113,6 +113,18 @@ func (d *ConnDriver) Ping(ctx context.Context) error {
 	return err
 }
 
+// CancelConn asks the plugin to stop every statement currently running on one
+// connection. The call goes out while the statement's own request is still in
+// flight — the plugin answers each request from its own goroutine — and the
+// plugin cancels the statement's context, which aborts the database/sql call.
+// A plugin that predates the cancel method answers ERR_NOT_SUPPORTED; the
+// statement then runs to completion and the caller reports cancel as
+// unsupported.
+func (d *ConnDriver) CancelConn(ctx context.Context, connID string) error {
+	_, err := d.callConn(ctx, connMethodCancel, ConnRef{ConnID: connID})
+	return err
+}
+
 // Close shuts the plugin process down.
 func (d *ConnDriver) Close() error { return d.proc.Close() }
 
@@ -165,6 +177,7 @@ const (
 	connMethodQueryStream = "queryStream"
 	connMethodMetrics     = "metrics"
 	connMethodCreateDB    = "createDatabase"
+	connMethodCancel      = "cancel"
 )
 
 // connFallbacks maps a fynequery method name onto the kernel's equivalent, used
@@ -187,6 +200,7 @@ var connFallbacks = map[string]string{
 	connMethodQueryStream: MethodConnQueryStream,
 	connMethodMetrics:     MethodConnMetrics,
 	connMethodCreateDB:    MethodConnCreateDB,
+	connMethodCancel:      MethodConnCancel,
 }
 
 // callConn sends one connection-oriented call, trying the fynequery name first and
@@ -280,6 +294,13 @@ func (c *Conn) Ping(ctx context.Context) error {
 func (c *Conn) Close() error                    { return c.driver.CloseConn(context.Background(), c.connID) }
 func (c *Conn) AsSQL() (dbcore.SQLDriver, bool) { return c, true }
 func (c *Conn) AsKV() (dbcore.KVDriver, bool)   { return nil, false }
+
+// CancelQuery stops every statement running on this connection (see
+// CancelConn). It is the wide-session surface's cancel: safe to call from
+// another goroutine while a Query/QueryStream on this connection is in flight.
+func (c *Conn) CancelQuery(ctx context.Context) error {
+	return c.driver.CancelConn(ctx, c.connID)
+}
 
 // Execute runs one statement on this connection.
 func (c *Conn) Execute(ctx context.Context, query string, args ...dbcore.Value) (*dbcore.QueryResult, error) {

@@ -59,6 +59,14 @@ const (
 	MethodConnQueryStream = "connQueryStream"
 	// MethodConnMetrics reads a connection's server metrics.
 	MethodConnMetrics = "connMetrics"
+	// MethodConnCancel stops every statement currently running on one
+	// connection. Additive: the plugin serves each request in its own
+	// goroutine, so a cancel reaches it while a query is still in flight, and
+	// the query's context cancellation aborts the database/sql call. A plugin
+	// that predates the method answers ERR_NOT_SUPPORTED (the host surfaces
+	// that as "cancel is not supported"), and the in-flight statement runs to
+	// completion.
+	MethodConnCancel = "connCancel"
 )
 
 // ConnectParams opens a connection on a plugin.

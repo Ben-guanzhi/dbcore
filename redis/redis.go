@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	goredis "github.com/redis/go-redis/v9"
 
@@ -23,13 +24,14 @@ import (
 const defaultScanCount = 100
 
 var (
-	_ dbcore.KVDriver       = (*RedisDriver)(nil)
-	_ dbcore.ElementWriter  = (*RedisDriver)(nil)
-	_ dbcore.ElementDeleter = (*RedisDriver)(nil)
-	_ dbcore.RowAppender    = (*RedisDriver)(nil)
-	_ dbcore.KeyAdmin       = (*RedisDriver)(nil)
-	_ dbcore.KeyScanner     = (*RedisDriver)(nil)
-	_ dbcore.TypedCommander = (*RedisDriver)(nil)
+	_ dbcore.KVDriver           = (*RedisDriver)(nil)
+	_ dbcore.ElementWriter      = (*RedisDriver)(nil)
+	_ dbcore.ElementDeleter     = (*RedisDriver)(nil)
+	_ dbcore.RowAppender        = (*RedisDriver)(nil)
+	_ dbcore.KeyAdmin           = (*RedisDriver)(nil)
+	_ dbcore.KeyScanner         = (*RedisDriver)(nil)
+	_ dbcore.TypedCommander     = (*RedisDriver)(nil)
+	_ dbcore.BoundedValueReader = (*RedisDriver)(nil)
 )
 
 // ScanMaxRounds caps the rounds one ScanKeysEnriched call may chain (D5,
@@ -255,6 +257,201 @@ func (d *RedisDriver) GetValue(ctx context.Context, key string) (dbcore.RedisVal
 	default:
 		return dbcore.RedisValue{Type: redisKeyType(t)}, nil
 	}
+}
+
+// GetValueBounded reads a key's value under a limit (BoundedValueReader): the
+// first window of any key in one call, with the full size and a truncated
+// flag, so a value grid never pays for a million-member collection or a
+// half-gigabyte string just to paint its first rows. Strings are cut at
+// MaxStringBytes on a rune boundary; collections return the first MaxEntries
+// entries — lists and zsets by rank, hash and set by SCAN (SSCAN can repeat a
+// member mid-rehash; the page is deduplicated), streams by ID order. A limit
+// of zero resolves to the package defaults.
+func (d *RedisDriver) GetValueBounded(ctx context.Context, key string, limit dbcore.RedisValueLimit) (dbcore.BoundedRedisValue, error) {
+	if limit.MaxStringBytes <= 0 {
+		limit.MaxStringBytes = dbcore.DefaultMaxStringBytes
+	}
+	if limit.MaxEntries <= 0 {
+		limit.MaxEntries = dbcore.DefaultMaxEntries
+	}
+	// Hold the read lock across every command, exactly like GetValue: a
+	// concurrent SelectDB must not swap the client mid-read.
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	c := d.client
+	t, err := c.Type(ctx, key).Result()
+	if err != nil {
+		return dbcore.BoundedRedisValue{}, err
+	}
+	switch redisKeyType(t) {
+	case dbcore.RedisNone:
+		return dbcore.BoundedRedisValue{}, fmt.Errorf("redis: key %q not found", key)
+	case dbcore.RedisStr:
+		n, err := c.StrLen(ctx, key).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		out := dbcore.BoundedRedisValue{Value: dbcore.RedisValue{Type: dbcore.RedisStr}, Total: n}
+		if n <= limit.MaxStringBytes {
+			out.Value.Str, err = c.Get(ctx, key).Result()
+			if err != nil {
+				return dbcore.BoundedRedisValue{}, err
+			}
+		} else {
+			out.Truncated = true
+			s, err := c.GetRange(ctx, key, 0, limit.MaxStringBytes-1).Result()
+			if err != nil {
+				return dbcore.BoundedRedisValue{}, err
+			}
+			out.Value.Str = trimPartialRune(s)
+		}
+		// The Int convenience only means something on the whole value: a
+		// truncated decimal is a different number, not a smaller one.
+		if !out.Truncated {
+			if n, perr := strconv.ParseInt(out.Value.Str, 10, 64); perr == nil {
+				out.Value.Int = n
+			}
+		}
+		return out, nil
+	case dbcore.RedisList:
+		n, err := c.LLen(ctx, key).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		items, err := c.LRange(ctx, key, 0, limit.MaxEntries-1).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		return dbcore.BoundedRedisValue{
+			Value:     dbcore.RedisValue{Type: dbcore.RedisList, Items: items},
+			Total:     n,
+			Truncated: n > limit.MaxEntries,
+		}, nil
+	case dbcore.RedisSet:
+		card, err := c.SCard(ctx, key).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		members, err := scanSetWindow(ctx, c, key, limit.MaxEntries)
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		sort.Strings(members)
+		return dbcore.BoundedRedisValue{
+			Value:     dbcore.RedisValue{Type: dbcore.RedisSet, Items: members},
+			Total:     card,
+			Truncated: card > int64(len(members)),
+		}, nil
+	case dbcore.RedisZSet:
+		card, err := c.ZCard(ctx, key).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		zs, err := c.ZRangeWithScores(ctx, key, 0, limit.MaxEntries-1).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		out := dbcore.BoundedRedisValue{Value: dbcore.RedisValue{Type: dbcore.RedisZSet}, Total: card, Truncated: card > limit.MaxEntries}
+		for _, z := range zs {
+			out.Value.Items = append(out.Value.Items, fmt.Sprint(z.Member))
+			out.Value.Scores = append(out.Value.Scores, z.Score)
+		}
+		return out, nil
+	case dbcore.RedisHash:
+		n, err := c.HLen(ctx, key).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		hash, err := scanHashWindow(ctx, c, key, limit.MaxEntries)
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		return dbcore.BoundedRedisValue{
+			Value:     dbcore.RedisValue{Type: dbcore.RedisHash, Hash: hash},
+			Total:     n,
+			Truncated: n > int64(len(hash)),
+		}, nil
+	case dbcore.RedisStream:
+		n, err := c.XLen(ctx, key).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		msgs, err := c.XRangeN(ctx, key, "-", "+", limit.MaxEntries).Result()
+		if err != nil {
+			return dbcore.BoundedRedisValue{}, err
+		}
+		v := dbcore.RedisValue{Type: dbcore.RedisStream}
+		for _, m := range msgs {
+			fields := make([]string, 0, len(m.Values))
+			entry := dbcore.RedisStreamEntry{ID: m.ID}
+			for k, val := range m.Values {
+				fields = append(fields, fmt.Sprintf("%s=%v", k, val))
+				entry.Fields = append(entry.Fields, dbcore.RedisField{Name: k, Value: fmt.Sprint(val)})
+			}
+			sort.Strings(fields)
+			v.Items = append(v.Items, m.ID+" "+strings.Join(fields, " "))
+			v.Stream = append(v.Stream, entry)
+		}
+		return dbcore.BoundedRedisValue{Value: v, Total: n, Truncated: n > limit.MaxEntries}, nil
+	default:
+		return dbcore.BoundedRedisValue{Value: dbcore.RedisValue{Type: redisKeyType(t)}}, nil
+	}
+}
+
+// scanSetWindow collects up to max distinct members with SSCAN. Whether
+// members remain is the caller's call (SCARD against what came back): SCAN's
+// cursor only says the walk ended, not that the window was the whole set, and
+// a server may return everything in one round regardless of the count hint.
+func scanSetWindow(ctx context.Context, c *goredis.Client, key string, max int64) ([]string, error) {
+	seen := map[string]struct{}{}
+	var members []string
+	var cursor uint64
+	for {
+		batch, next, err := c.SScan(ctx, key, cursor, "", max-int64(len(members))).Result()
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range batch {
+			if _, dup := seen[m]; dup {
+				continue
+			}
+			seen[m] = struct{}{}
+			members = append(members, m)
+		}
+		if next == 0 || int64(len(members)) >= max {
+			return members, nil
+		}
+		cursor = next
+	}
+}
+
+// scanHashWindow is scanSetWindow for hashes: HSCAN pairs flattened as
+// field/value, deduplicated by field, up to max fields.
+func scanHashWindow(ctx context.Context, c *goredis.Client, key string, max int64) (map[string]string, error) {
+	hash := map[string]string{}
+	var cursor uint64
+	for {
+		raw, next, err := c.HScan(ctx, key, cursor, "", max-int64(len(hash))).Result()
+		if err != nil {
+			return nil, err
+		}
+		for i := 0; i+1 < len(raw) && int64(len(hash)) < max; i += 2 {
+			hash[raw[i]] = raw[i+1]
+		}
+		if next == 0 || int64(len(hash)) >= max {
+			return hash, nil
+		}
+		cursor = next
+	}
+}
+
+// trimPartialRune backs a byte cut up to the last complete UTF-8 rune, so a
+// truncated string value stays valid text for the grid.
+func trimPartialRune(s string) string {
+	for len(s) > 0 && !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // SetValue replaces the key with v. Sorted sets use Scores parallel to Items

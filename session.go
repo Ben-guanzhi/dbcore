@@ -217,6 +217,13 @@ func AsTypedCommander(d Driver) (TypedCommander, bool) {
 	return w, ok
 }
 
+// AsBoundedValueReader asserts the bounded KV read defined in metadata.go, so a
+// value grid caps what it fetches instead of trusting every key to be small.
+func AsBoundedValueReader(d Driver) (BoundedValueReader, bool) {
+	w, ok := d.(BoundedValueReader)
+	return w, ok
+}
+
 // ExtraMetadataReader is the optional capability for the catalog facts beyond
 // tables/columns/indexes/foreign keys: a view's DDL, a table's CHECK
 // constraints, and a schema's sequences and routines (functions/procedures).
