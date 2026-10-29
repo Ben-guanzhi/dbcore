@@ -250,13 +250,29 @@ func IsExactDecimalType(typeName string) bool {
 	return exactDecimalTypes[strings.ToUpper(strings.TrimSpace(base))]
 }
 
+// numericByteTypes are the integer/float spellings the text protocol delivers
+// as []byte. With interpolateParams=true go-sql-driver switches to the text
+// protocol without changing the catalog type: COUNT(*) and friends arrive as
+// ValBlob, and a count read through the blob fallback silently reads zero
+// (ValBlob.I == 0). The binary protocol delivers the same columns as int64/
+// float64, so parsing the bytes restores the kind the wire shape lost.
+var numericByteTypes = map[string]bool{
+	"BIGINT": true, "INT": true, "INTEGER": true, "SMALLINT": true,
+	"TINYINT": true, "MEDIUMINT": true, "YEAR": true, "BIT": true,
+	"FLOAT": true, "DOUBLE": true,
+}
+
 // valueForColumn converts a scanned value using the column's catalog type.
 func valueForColumn(v any, typeName string) Value {
 	val := nativeToValue(v)
 	upper := strings.ToUpper(typeName)
 	// Exact-decimal columns: bytes or text become ValDecimal when the digits
 	// parse; anything else (a driver that hands float64) keeps its own kind.
-	if exactDecimalTypes[upper] && (val.Kind == ValBlob || val.Kind == ValText) {
+	// IsExactDecimalType strips a (p,s) suffix — SQLite reports the declared
+	// "DECIMAL(10,2)" verbatim while this map's key is bare "DECIMAL", so the
+	// two entry points must go through the one predicate ("can never
+	// disagree" is the contract its own comment states).
+	if IsExactDecimalType(typeName) && (val.Kind == ValBlob || val.Kind == ValText) {
 		text := val.S
 		if val.Kind == ValBlob {
 			text = string(val.B)
@@ -267,6 +283,16 @@ func valueForColumn(v any, typeName string) Value {
 		return Value{Kind: ValText, S: text}
 	}
 	if val.Kind == ValBlob && textColumnTypes[upper] {
+		return Value{Kind: ValText, S: string(val.B)}
+	}
+	// The text protocol's numeric bytes (see numericByteTypes).
+	if val.Kind == ValBlob && numericByteTypes[upper] {
+		if i, err := strconv.ParseInt(string(val.B), 10, 64); err == nil {
+			return Value{Kind: ValInt, I: i}
+		}
+		if f, err := strconv.ParseFloat(string(val.B), 64); err == nil {
+			return Value{Kind: ValFloat, F: f}
+		}
 		return Value{Kind: ValText, S: string(val.B)}
 	}
 	// go-ora decodes every NUMBER as its decimal string, including COUNT(*)

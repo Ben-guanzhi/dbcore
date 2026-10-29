@@ -85,9 +85,13 @@ func rowsToResult(rows *sql.Rows) (*QueryResult, error) {
 // Beyond the read-keyword prefixes, INSERT/UPDATE/DELETE ... RETURNING
 // (PostgreSQL, SQLite >= 3.35, MariaDB) also produces a result set that a plain
 // Exec would silently discard, so those route to the query path too.
+//
+// Leading trivia (whitespace, comments, opening parens) is stripped before the
+// prefix test: Oracle's optimizer hints make `/*+ ... */ SELECT` the everyday
+// spelling of a read, and without the strip the statement misroutes to Exec —
+// the result set is silently discarded and the user sees an empty grid.
 func IsReadQuery(s string) bool {
-	t := strings.TrimSpace(s)
-	t = strings.TrimLeft(t, "(")
+	t := skipLeadingTrivia(s)
 	upper := strings.ToUpper(t)
 	for _, p := range []string{"SELECT", "WITH", "PRAGMA", "SHOW", "EXPLAIN", "VALUES", "TABLE", "DESC", "DESCRIBE"} {
 		if strings.HasPrefix(upper, p) {
@@ -95,6 +99,33 @@ func IsReadQuery(s string) bool {
 		}
 	}
 	return HasReturningClause(t)
+}
+
+// skipLeadingTrivia strips whitespace, line/block comments and opening parens
+// from the front of a statement, so keyword classification sees the first real
+// token. A statement that is nothing but an unterminated comment returns "".
+func skipLeadingTrivia(s string) string {
+	for {
+		s = strings.TrimLeft(s, " \t\r\n;")
+		switch {
+		case strings.HasPrefix(s, "--"):
+			if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+				s = s[nl+1:]
+				continue
+			}
+			return ""
+		case strings.HasPrefix(s, "/*"):
+			if end := strings.Index(s, "*/"); end >= 0 {
+				s = s[end+2:]
+				continue
+			}
+			return ""
+		case strings.HasPrefix(s, "("):
+			s = s[1:]
+		default:
+			return s
+		}
+	}
 }
 
 // HasReturningClause reports whether the statement contains a RETURNING

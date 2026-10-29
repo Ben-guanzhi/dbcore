@@ -156,3 +156,31 @@ func quoted(t *testing.T, dbType, name string) string {
 	}
 	return q
 }
+
+// SQLite's LIKE has no default escape character (MySQL's is the backslash):
+// without ESCAPE '\' the \%-escaped pattern matches literal backslashes and a
+// fragment containing _ or % matches anything on the table.
+func TestSQLiteSearchEscapesLike(t *testing.T) {
+	q, _, err := SearchObjectsQuery(SQLite, "", "_users%", 10)
+	if err != nil {
+		t.Fatalf("objects: %v", err)
+	}
+	if !strings.Contains(q, `ESCAPE '\'`) {
+		t.Fatalf("object search missing ESCAPE: %s", q)
+	}
+	q, _, err = SearchDataQuery(SQLite, "t", []string{"a", "b"}, "50%", 10)
+	if err != nil {
+		t.Fatalf("data: %v", err)
+	}
+	if !strings.Contains(q, `ESCAPE '\'`) {
+		t.Fatalf("data search missing ESCAPE: %s", q)
+	}
+	// MySQL keeps the default escape — the clause must not be doubled up.
+	q, _, err = SearchDataQuery(MySQL, "t", []string{"a"}, "50%", 10)
+	if err != nil {
+		t.Fatalf("mysql data: %v", err)
+	}
+	if strings.Contains(q, "ESCAPE") {
+		t.Fatalf("mysql data search must rely on the default escape: %s", q)
+	}
+}

@@ -140,3 +140,17 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 		}
 	}
 }
+
+// BrowseRows tolerates a nil request (the plugin path normalizes one in), so
+// the statement builders must too — a nil deref here panic'd the caller.
+func TestBuildRowsQueryNilRequest(t *testing.T) {
+	var d MySQLDialect
+	q, _ := d.BuildRowsQuery("", "t", nil)
+	if q == "" {
+		t.Fatal("nil request built an empty query")
+	}
+	cq, _ := d.BuildCountQuery("", "t", nil)
+	if cq == "" {
+		t.Fatal("nil request built an empty count query")
+	}
+}

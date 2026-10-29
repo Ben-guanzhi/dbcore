@@ -151,3 +151,41 @@ func TestIntFromAcceptsIntegralDecimal(t *testing.T) {
 		t.Errorf("IntFrom(4.5) must refuse")
 	}
 }
+
+// The text protocol (InterpolateParams) delivers integer/float columns as
+// []byte: a COUNT(*) read through the blob fallback used to land as
+// ValBlob{I:0} — every count silently read as zero. The well-known numeric
+// spellings must parse back to their kind; a genuine blob keeps its bytes.
+func TestValueForColumnTextProtocolNumericBytes(t *testing.T) {
+	v := valueForColumn([]byte("42"), "BIGINT")
+	if v.Kind != ValInt || v.I != 42 {
+		t.Fatalf("BIGINT bytes = %v, want int 42", v)
+	}
+	v = valueForColumn([]byte("7"), "COUNT") // information_schema spellings vary
+	if v.Kind != ValBlob {
+		t.Fatalf("unlisted type must stay a blob, got %v", v)
+	}
+	v = valueForColumn([]byte("2.5"), "DOUBLE")
+	if v.Kind != ValFloat || v.F != 2.5 {
+		t.Fatalf("DOUBLE bytes = %v, want float 2.5", v)
+	}
+	v = valueForColumn([]byte("2.5"), "INT") // value wins over the declared kind
+	if v.Kind != ValFloat || v.F != 2.5 {
+		t.Fatalf("unparsable int bytes = %v, want float (never the blob zero)", v)
+	}
+	// A blob column is bytes, not a number waiting to happen.
+	v = valueForColumn([]byte("42"), "BLOB")
+	if v.Kind != ValBlob {
+		t.Fatalf("blob column = %v, want blob", v)
+	}
+}
+
+// SQLite reports the declared type verbatim ("DECIMAL(10,2)"), while the
+// exact-decimal map's key is the bare spelling: the routing must go through
+// the suffix-stripping predicate or the column degrades to text.
+func TestValueForColumnDecimalWithPrecision(t *testing.T) {
+	v := valueForColumn([]byte("123.45"), "DECIMAL(10,2)")
+	if v.Kind != ValDecimal || v.S != "123.45" {
+		t.Fatalf("DECIMAL(10,2) bytes = %v, want decimal", v)
+	}
+}

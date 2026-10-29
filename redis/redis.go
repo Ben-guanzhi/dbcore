@@ -448,7 +448,11 @@ func scanHashWindow(ctx context.Context, c *goredis.Client, key string, max int6
 // trimPartialRune backs a byte cut up to the last complete UTF-8 rune, so a
 // truncated string value stays valid text for the grid.
 func trimPartialRune(s string) string {
-	for len(s) > 0 && !utf8.ValidString(s) {
+	// At most 3 bytes of rollback — half the longest rune. Redis strings are
+	// binary-safe: a value that is invalid UTF-8 from the start would
+	// otherwise back all the way to "" and a big binary blob would surface as
+	// empty instead of as its (truncated) bytes. Garbage in, garbage out.
+	for i := 0; i < 3 && len(s) > 0 && !utf8.ValidString(s); i++ {
 		s = s[:len(s)-1]
 	}
 	return s

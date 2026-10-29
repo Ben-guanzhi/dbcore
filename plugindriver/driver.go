@@ -315,11 +315,15 @@ func (d *Driver) Dead() bool {
 
 // Close shuts the plugin down. It is idempotent and never blocks on a dead child.
 func (d *Driver) Close() error {
-	if d.closed.Swap(true) {
+	if d.closed.Load() {
 		return nil
 	}
-	// Ask politely first: a plugin may want to close its handle.
+	// Ask politely first: a plugin may want to close its handle. The closed
+	// flag flips only after the call — call() refuses everything once the flag
+	// is up, so swapping first silently dropped the request and every plugin
+	// was killed without its chance to clean up.
 	_, _ = d.call(context.Background(), MethodClose, nil)
+	d.closed.Store(true)
 	_ = d.stdin.Close()
 	d.mu.Lock()
 	d.pending = make(map[int64]chan Response)

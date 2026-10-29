@@ -74,6 +74,11 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 	case plugindriver.MethodPing:
 		send("pong", "", "")
 	case plugindriver.MethodClose:
+		// The polite-close test marks receipt through a file: Close() used to
+		// flip its closed flag before sending, so this branch never ran.
+		if p := os.Getenv("FAKE_CLOSE_MARKER"); p != "" {
+			_ = os.WriteFile(p, []byte("ok"), 0o644)
+		}
 		send(nil, "", "")
 		os.Exit(0)
 	case plugindriver.MethodListSchemas:
@@ -509,4 +514,30 @@ func TestDriverDeadAfterClose(t *testing.T) {
 	if !drv.Dead() {
 		t.Fatal("a closed driver reports alive")
 	}
+}
+
+// Close must ask politely before flipping its closed flag: call() refuses
+// everything once the flag is up, so the old swap-first order silently dropped
+// the MethodClose request and every plugin was killed with no chance to clean
+// up its own handles. The child marks receipt through a file.
+func TestCloseAsksPolitelyFirst(t *testing.T) {
+	binary := buildFakePlugin(t)
+	marker := filepath.Join(t.TempDir(), "polite-close")
+	t.Setenv("FAKE_CLOSE_MARKER", marker)
+
+	drv, err := plugindriver.Start(context.Background(), binary, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := drv.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the plugin never received the polite close request")
 }

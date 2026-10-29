@@ -327,9 +327,12 @@ func (c *Conn) ExecuteIn(exec dbcore.SQLTx, ctx context.Context, query string, a
 		cells[i] = EncodeValue(arg)
 	}
 	raw, err := c.driver.callConn(ctx, connMethodQuery, ConnQueryParams{
-		ConnID:  c.connID,
-		SQL:     query,
-		MaxRows: len(args) + 1, // the plugin caps the rows; the value is advisory
+		ConnID: c.connID,
+		SQL:    query,
+		// 0 = the plugin's own default cap. It used to be len(args)+1 — a row
+		// limit derived from the argument count, which truncated a no-arg
+		// SELECT to one row in any plugin that honors the field.
+		MaxRows: 0,
 	})
 	if err != nil {
 		return nil, err

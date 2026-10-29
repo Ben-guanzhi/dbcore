@@ -358,6 +358,9 @@ func (MySQLDialect) LimitOffset(limit, offset int) string {
 }
 
 func (l MySQLDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRowsRequest) (string, []dbcore.Value) {
+	if req == nil {
+		req = &dbcore.TableRowsRequest{}
+	}
 	var b strings.Builder
 	b.WriteString("SELECT * FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))
@@ -368,6 +371,9 @@ func (l MySQLDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRows
 }
 
 func (l MySQLDialect) BuildCountQuery(schema, table string, req *dbcore.TableRowsRequest) (string, []dbcore.Value) {
+	if req == nil {
+		req = &dbcore.TableRowsRequest{}
+	}
 	var b strings.Builder
 	b.WriteString("SELECT COUNT(*) FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))

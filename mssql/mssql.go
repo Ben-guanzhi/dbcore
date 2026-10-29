@@ -380,6 +380,9 @@ func (MSSQLDialect) LimitOffset(limit, offset int) string {
 }
 
 func (l MSSQLDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRowsRequest) (string, []dbcore.Value) {
+	if req == nil {
+		req = &dbcore.TableRowsRequest{}
+	}
 	var b strings.Builder
 	b.WriteString("SELECT * FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))
@@ -389,6 +392,9 @@ func (l MSSQLDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRows
 }
 
 func (l MSSQLDialect) BuildCountQuery(schema, table string, req *dbcore.TableRowsRequest) (string, []dbcore.Value) {
+	if req == nil {
+		req = &dbcore.TableRowsRequest{}
+	}
 	var b strings.Builder
 	b.WriteString("SELECT COUNT(*) FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))

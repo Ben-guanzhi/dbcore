@@ -42,6 +42,14 @@ func TestIsReadQuery(t *testing.T) {
 		{"UPDATE t SET a = 1 -- trailing returning comment", false},
 		{"UPDATE returning_tbl SET a = 1", false},
 		{"UPDATE t SET a = 1 WHERE b IN (SELECT c FROM returning_log)", false},
+		// leading trivia (Oracle hints are the everyday case): a read must not
+		// misroute to Exec because a comment hides the keyword
+		{"/*+ FULL(t) */ SELECT * FROM t", true},
+		{"-- a note\nSELECT 1", true},
+		{"/* block */ WITH x AS (SELECT 1) SELECT * FROM x", true},
+		{" /* c */ (SELECT 1)", true},
+		{"/*+ index */ UPDATE t SET a = 1", false},
+		{"-- only a comment", false},
 		// a value ending in a backslash must not swallow the closing quote
 		{"UPDATE t SET note = 'trailing\\'", false},
 		// the backslash escapes the quote, so "returning" stays inside the

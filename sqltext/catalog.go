@@ -193,16 +193,23 @@ func ColumnsQuery(dbType, database, schema, table string) (string, []interface{}
 			ORDER BY c.ORDINAL_POSITION`, comment, name, name, name, QuotedLiteral(SQLServer, table), QuotedLiteral(SQLServer, schema))
 		return query, nil, nil
 	case Oracle:
+		// ALL_TAB_COLUMNS carries no COMMENTS column — the live driver joins
+		// ALL_COL_COMMENTS the same way. The PK subquery pins OWNER too:
+		// constraint names are only unique per schema, so a cross-schema
+		// namesake would misflag a column as primary key.
 		return fmt.Sprintf(`SELECT c.COLUMN_NAME, c.DATA_TYPE, c.NULLABLE, c.DATA_DEFAULT,
-			CASE WHEN cc.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END, c.COMMENTS
+			CASE WHEN cc.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END,
+			NVL(cm.COMMENTS, '')
 			FROM ALL_TAB_COLUMNS c
 			LEFT JOIN (
-				SELECT cols.COLUMN_NAME
+				SELECT cols.OWNER, cols.COLUMN_NAME
 				FROM ALL_CONSTRAINTS cons
 				INNER JOIN ALL_CONS_COLUMNS cols
-					ON cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
-				WHERE cons.TABLE_NAME = %s AND cons.CONSTRAINT_TYPE = 'P'
-			) cc ON c.COLUMN_NAME = cc.COLUMN_NAME
+					ON cons.OWNER = cols.OWNER AND cons.CONSTRAINT_NAME = cols.CONSTRAINT_NAME
+				WHERE cons.TABLE_NAME = %s AND cons.CONSTRAINT_TYPE = 'P' AND cons.OWNER = USER
+			) cc ON c.OWNER = cc.OWNER AND c.COLUMN_NAME = cc.COLUMN_NAME
+			LEFT JOIN ALL_COL_COMMENTS cm
+				ON cm.OWNER = c.OWNER AND cm.TABLE_NAME = c.TABLE_NAME AND cm.COLUMN_NAME = c.COLUMN_NAME
 			WHERE c.TABLE_NAME = %s AND c.OWNER = USER
 			ORDER BY c.COLUMN_ID`,
 			QuotedLiteral(Oracle, table), QuotedLiteral(Oracle, table)), nil, nil

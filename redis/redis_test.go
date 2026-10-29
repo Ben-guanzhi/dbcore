@@ -721,3 +721,21 @@ func TestGetValueBoundedCollections(t *testing.T) {
 		t.Fatalf("oversized limit = %+v", got)
 	}
 }
+
+// Redis strings are binary-safe: garbage that is invalid UTF-8 from the start
+// must survive the truncation trim (older code backed all the way to ""), and
+// a cut in the middle of a multi-byte rune still trims to the rune boundary.
+func TestTrimPartialRuneBinaryGarbage(t *testing.T) {
+	if got := trimPartialRune("ÿþýüû"); got == "" {
+		t.Fatal("binary garbage trimmed to empty")
+	}
+	if got := trimPartialRune("abcÿ"); got != "abcÿ" {
+		t.Fatalf("trailing garbage = %q, want preserved", got)
+	}
+	// A 3-byte rune cut after its first byte: two bytes of rollback complete it.
+	full := "é" // U+00E9, two bytes
+	cut := full[:1]
+	if got := trimPartialRune(cut); got != "" {
+		t.Fatalf("cut rune = %q, want the partial bytes dropped", got)
+	}
+}

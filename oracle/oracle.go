@@ -434,6 +434,9 @@ func (OracleDialect) LimitOffset(limit, offset int) string {
 }
 
 func (l OracleDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRowsRequest) (string, []dbcore.Value) {
+	if req == nil {
+		req = &dbcore.TableRowsRequest{}
+	}
 	var b strings.Builder
 	b.WriteString("SELECT * FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))
@@ -444,6 +447,9 @@ func (l OracleDialect) BuildRowsQuery(schema, table string, req *dbcore.TableRow
 }
 
 func (l OracleDialect) BuildCountQuery(schema, table string, req *dbcore.TableRowsRequest) (string, []dbcore.Value) {
+	if req == nil {
+		req = &dbcore.TableRowsRequest{}
+	}
 	var b strings.Builder
 	b.WriteString("SELECT COUNT(*) FROM ")
 	b.WriteString(l.QuoteIdent(schema, table))

@@ -40,8 +40,11 @@ func SearchObjectsQuery(dbType, database, fragment string, limit int) (string, [
 			ORDER BY 1, 2 LIMIT %d`, limit),
 			[]interface{}{pattern}, nil
 	case SQLite:
+		// SQLite's LIKE has no default escape character (MySQL's is the
+		// backslash): without ESCAPE '\' the \%-escaped pattern matches
+		// literal backslashes and a fragment with _ or % matches anything.
 		return fmt.Sprintf(`SELECT '', name, UPPER(type) FROM sqlite_master
-			WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%%' AND name LIKE ?
+			WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%%' AND name LIKE ? ESCAPE '\' 
 			ORDER BY name LIMIT %d`, limit),
 			[]interface{}{pattern}, nil
 	case SQLServer:
@@ -103,11 +106,18 @@ func SearchDataQuery(dbType, table string, columns []string, keyword string, lim
 	case MySQL, SQLite:
 		joined := ""
 		var args []interface{}
+		// MySQL's LIKE escapes by default with the backslash; SQLite has no
+		// default escape and needs the clause spelled out (see the object
+		// search above).
+		esc := ""
+		if Normalize(dbType) == SQLite {
+			esc = ` ESCAPE '\'`
+		}
 		for i, col := range conds {
 			if i > 0 {
 				joined += " OR "
 			}
-			joined += col + " LIKE ?"
+			joined += col + " LIKE ?" + esc
 			args = append(args, pattern)
 		}
 		return fmt.Sprintf("SELECT * FROM %s WHERE %s LIMIT %d", table, joined, limit), args, nil
