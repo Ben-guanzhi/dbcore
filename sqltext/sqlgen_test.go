@@ -138,9 +138,19 @@ func TestRowLimitShapes(t *testing.T) {
 	if got := RowLimit(SQLServer, "SELECT * FROM t", 5); got != "SELECT TOP (5) * FROM t" {
 		t.Errorf("sqlserver TOP: %q", got)
 	}
-	// A CTE keeps whatever limit it declared itself: TOP cannot be injected.
-	if got := RowLimit(SQLServer, "WITH c AS (SELECT 1) SELECT * FROM c", 5); got != "WITH c AS (SELECT 1) SELECT * FROM c" {
-		t.Errorf("sqlserver CTE must run untouched: %q", got)
+	// A WITH statement wraps in a derived table and gets the TOP cap: T-SQL
+	// accepts the CTE head inside a subquery, and leaving it untouched was
+	// an unbounded read.
+	if got := RowLimit(SQLServer, "WITH c AS (SELECT 1) SELECT * FROM c", 5); got != "SELECT TOP (5) * FROM (WITH c AS (SELECT 1) SELECT * FROM c) AS limited" {
+		t.Errorf("sqlserver WITH wrap: %q", got)
+	}
+	// A data-modifying CTE cannot be wrapped in a derived table: untouched.
+	if got := RowLimit(SQLServer, "WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c", 5); got != "WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c" {
+		t.Errorf("sqlserver DML CTE must run untouched: %q", got)
+	}
+	// A WITH that carries its own TOP keeps it (queryOwnLimit still applies).
+	if got := RowLimit(SQLServer, "WITH c AS (SELECT 1) SELECT TOP 9 * FROM c", 5); got != "WITH c AS (SELECT 1) SELECT TOP 9 * FROM c" {
+		t.Errorf("sqlserver CTE own limit must survive: %q", got)
 	}
 	if got := RowLimit(Oracle, "SELECT * FROM t", 5); got != "SELECT * FROM (SELECT * FROM t) WHERE ROWNUM <= 5" {
 		t.Errorf("oracle ROWNUM wrap: %q", got)

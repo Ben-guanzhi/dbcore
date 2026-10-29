@@ -77,3 +77,28 @@ func TestOptionsWithPoolMapsKnobs(t *testing.T) {
 		t.Errorf("Options with no pool config set sizes: %d/%d", plain.PoolSize, plain.MinIdleConns)
 	}
 }
+
+// verify-ca is a real TLS mode in the portability layer (conn.go lists it
+// beside require/verify-full): it used to fall through to a plaintext dial,
+// sending every key name and value in clear text to a server the user asked
+// to talk TLS to. Both the DSN scheme and the TLS config must honor it, with
+// the chain verified by hand (the hostname check stays opt-in).
+func TestVerifyCAConfiguresTLS(t *testing.T) {
+	spec := dbcore.ConnSpec{Kind: dbcore.KindRedis, Host: "h", SSLMode: "verify-ca"}
+	if got := DSN(spec); got[:8] != "rediss:/" {
+		t.Fatalf("verify-ca must produce a rediss:// DSN, got %q", got)
+	}
+	opts, err := Options(spec)
+	if err != nil {
+		t.Fatalf("options: %v", err)
+	}
+	if opts.TLSConfig == nil {
+		t.Fatal("verify-ca must configure a TLS client")
+	}
+	if !opts.TLSConfig.InsecureSkipVerify {
+		t.Fatal("verify-ca verifies the chain by hand, not the hostname")
+	}
+	if opts.TLSConfig.VerifyPeerCertificate == nil {
+		t.Fatal("verify-ca must carry the chain verifier")
+	}
+}

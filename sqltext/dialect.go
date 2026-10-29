@@ -146,9 +146,88 @@ func rowLimitSQLServer(query string, limit int) string {
 		return query
 	}
 	if !strings.HasPrefix(upper, "SELECT") {
+		// A WITH statement: SQL Server accepts the CTE head inside a derived
+		// table, so the TOP (n) cap applies exactly as to a SELECT — leaving
+		// it untouched turned every unbounded CTE into a full-table scan.
+		// Only read statements can be wrapped; data-modifying CTEs
+		// (WITH … INSERT/UPDATE/DELETE) cannot and stay untouched.
+		if cteOuterIsRead(trimmed) {
+			return fmt.Sprintf("SELECT TOP (%d) * FROM (%s) AS limited", limit, trimmed)
+		}
 		return query
 	}
 	return fmt.Sprintf("SELECT TOP (%d)%s", limit, trimmed[len("SELECT"):])
+}
+
+// cteOuterIsRead reports whether a WITH statement's outermost statement -
+// the keyword at paren depth 0 after the CTE list - is a SELECT. The scan
+// skips string literals, quoted identifiers and comments; the outer keyword
+// decides the statement kind. A data-modifying CTE (WITH ... INSERT/UPDATE/
+// DELETE) cannot be wrapped in a derived table, so only reads are wrapped.
+func cteOuterIsRead(s string) bool {
+	depth := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '\\':
+			i++
+			for i < len(s) {
+				if s[i] == '\\' && i+1 < len(s) {
+					i += 2
+					continue
+				}
+				if s[i] == '\'' {
+					if i+1 < len(s) && s[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case c == '-' && i+1 < len(s) && s[i+1] == '-':
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			if end := strings.Index(s[i:], "*/"); end >= 0 {
+				i += end + 2
+			} else {
+				return false
+			}
+		case c == '(':
+			depth++
+			i++
+		case c == ')':
+			depth -= 1
+			i++
+		default:
+			if depth == 0 {
+				start := i
+				for i < len(s) && isWordByte(s[i]) {
+					i++
+				}
+				switch strings.ToUpper(s[start:i]) {
+				case "SELECT":
+					return true
+				case "INSERT", "UPDATE", "DELETE", "MERGE":
+					return false
+				}
+			} else {
+				i++
+			}
+		}
+	}
+	return false
+}
+
+// isWordByte reports whether c may occur inside a SQL word. ASCII only: a
+// non-ASCII run is stepped over one byte at a time and can never form a
+// keyword.
+func isWordByte(c byte) bool {
+	return c == '_' || c == '$' ||
+		(c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 func rowLimitOracle(query string, limit int) string {

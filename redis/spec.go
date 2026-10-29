@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -18,7 +19,8 @@ func init() { dbcore.RegisterFactory(dbcore.KindRedis, OpenSpec) }
 // DSN renders spec as a redis:// or rediss:// URL (diagnostics and tests).
 func DSN(spec dbcore.ConnSpec) string {
 	scheme := "redis"
-	if strings.EqualFold(spec.SSLMode, "require") || strings.EqualFold(spec.SSLMode, "verify-full") {
+	if strings.EqualFold(spec.SSLMode, "require") || strings.EqualFold(spec.SSLMode, "verify-full") ||
+		strings.EqualFold(spec.SSLMode, "verify-ca") {
 		scheme = "rediss"
 	}
 	u := url.URL{
@@ -54,8 +56,22 @@ func options(spec dbcore.ConnSpec, pool dbcore.PoolConfig) (*goredis.Options, er
 		}
 		opts.DB = n
 	}
-	if mode := strings.ToLower(spec.SSLMode); mode == "require" || mode == "verify-full" {
-		opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	if mode := strings.ToLower(spec.SSLMode); mode == "require" || mode == "verify-full" || mode == "verify-ca" {
+		// verify-ca used to fall through to a PLAINTEXT connection: the
+		// portability layer lists it as a real mode (conn.go), and a
+		// silent plaintext dial would send every key name and value in
+		// clear text to a server the user asked to talk TLS to. The chain is
+		// verified by hand below — the driver's hostname check stays opt-in
+		// so the user's verify-ca choice stands.
+		if mode == "verify-ca" {
+			opts.TLSConfig = &tls.Config{
+				MinVersion:            tls.VersionTLS12,
+				InsecureSkipVerify:    true,
+				VerifyPeerCertificate: redisVerifyChainOnly,
+			}
+		} else {
+			opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
 	}
 	// go-redis names the same knobs differently; the mapping is one-to-one.
 	if pool.MaxOpen > 0 {
@@ -98,4 +114,24 @@ func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig)
 	}
 	cp := *opts
 	return &RedisDriver{client: c, opts: &cp}, nil
+}
+
+// redisVerifyChainOnly is the verify-ca counterpart of the MySQL driver's
+// verifyChainOnly: trust the certificate chain, skip the hostname check.
+func redisVerifyChainOnly(raw [][]byte, _ [][]*x509.Certificate) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("redis: server presented no certificate")
+	}
+	leaf, err := x509.ParseCertificate(raw[0])
+	if err != nil {
+		return err
+	}
+	intermediates := x509.NewCertPool()
+	for _, der := range raw[1:] {
+		if cert, err := x509.ParseCertificate(der); err == nil {
+			intermediates.AddCert(cert)
+		}
+	}
+	_, err = leaf.Verify(x509.VerifyOptions{Intermediates: intermediates})
+	return err
 }
