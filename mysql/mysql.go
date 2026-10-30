@@ -391,6 +391,12 @@ func (l MySQLDialect) appendWhere(b *strings.Builder, req *dbcore.TableRowsReque
 		if i > 0 {
 			b.WriteString(" AND ")
 		}
+		if f.Op == dbcore.FilterIsNull || f.Op == dbcore.FilterIsNotNull {
+			b.WriteString(l.QuoteIdent(f.Column))
+			b.WriteString(" ")
+			b.WriteString(string(f.Op))
+			continue
+		}
 		op := string(f.Op)
 		if op == "" {
 			op = "="
