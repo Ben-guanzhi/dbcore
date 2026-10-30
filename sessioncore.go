@@ -330,7 +330,6 @@ func (s *SessionCore) ApplyBatch(ctx context.Context, req BatchRequest) error {
 	}
 
 	s.mu.Lock()
-	conn := s.conn
 	tx := s.tx
 	s.mu.Unlock()
 	if tx != nil { // raced with BeginTx after execer saw none; run on it anyway
@@ -345,9 +344,6 @@ func (s *SessionCore) ApplyBatch(ctx context.Context, req BatchRequest) error {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		if conn != nil {
-			_ = conn.Close()
-		}
 		return err
 	}
 	return nil
