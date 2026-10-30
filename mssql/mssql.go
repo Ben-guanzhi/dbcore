@@ -327,6 +327,10 @@ func (d *MSSQLDriver) CreateTableSQL(ctx context.Context, schema, table string) 
 }
 
 func (d *MSSQLDriver) BrowseRows(ctx context.Context, schema, table string, req *dbcore.TableRowsRequest) (*dbcore.TableRowsResult, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
 	q, a := d.dialect.BuildRowsQuery(schema, table, req)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
@@ -342,6 +346,10 @@ func (d *MSSQLDriver) BrowseRows(ctx context.Context, schema, table string, req 
 }
 
 func (d *MSSQLDriver) BrowseRowsCount(ctx context.Context, schema, table string, req *dbcore.TableRowsRequest) (uint64, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return 0, err
+	}
 	q, a := d.dialect.BuildCountQuery(schema, table, req)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {

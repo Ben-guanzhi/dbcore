@@ -247,7 +247,19 @@ func (d *SQLiteDriver) CreateTableSQL(ctx context.Context, schema, table string)
 	return res.Rows[0][0].S, nil
 }
 
+// resolveSchema maps an empty schema to SQLite's default ("main"): the
+// row-browse path used to quote the empty name into `""."table"`, which
+// is not a valid table reference. Engines with a live "current schema"
+// resolve through a query; SQLite's is static.
+func (d *SQLiteDriver) resolveSchema(schema string) string {
+	if strings.TrimSpace(schema) == "" {
+		return "main"
+	}
+	return schema
+}
+
 func (d *SQLiteDriver) BrowseRows(ctx context.Context, schema, table string, req *dbcore.TableRowsRequest) (*dbcore.TableRowsResult, error) {
+	schema = d.resolveSchema(schema)
 	q, a := d.dialect.BuildRowsQuery(schema, table, req)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
@@ -263,6 +275,7 @@ func (d *SQLiteDriver) BrowseRows(ctx context.Context, schema, table string, req
 }
 
 func (d *SQLiteDriver) BrowseRowsCount(ctx context.Context, schema, table string, req *dbcore.TableRowsRequest) (uint64, error) {
+	schema = d.resolveSchema(schema)
 	q, a := d.dialect.BuildCountQuery(schema, table, req)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {

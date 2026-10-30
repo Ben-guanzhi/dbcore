@@ -230,6 +230,23 @@ func (h Harness) Run(t *testing.T) {
 		}
 	})
 
+	t.Run("browse_empty_schema", func(t *testing.T) {
+		// An empty schema must resolve to the session's current schema (or be
+		// irrelevant, on engines without schemas): three drivers used to pass
+		// it straight into the quoted table path and generate invalid SQL
+		// like `.`dbcore_ct_…``.
+		res, err := drv.BrowseRows(ctx, "", name, &dbcore.TableRowsRequest{Page: 1, PageSize: 3})
+		if err != nil {
+			t.Fatalf("BrowseRows with empty schema: %v", err)
+		}
+		if len(res.Rows) == 0 {
+			t.Fatal("BrowseRows with empty schema returned no rows")
+		}
+		if _, err := drv.BrowseRowsCount(ctx, "", name, &dbcore.TableRowsRequest{}); err != nil {
+			t.Fatalf("BrowseRowsCount with empty schema: %v", err)
+		}
+	})
+
 	t.Run("tx_commit_removes_entry", func(t *testing.T) {
 		tm := dbcore.NewTxManager(drv)
 		defer tm.Close()
