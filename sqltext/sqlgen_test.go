@@ -168,6 +168,36 @@ func TestRowLimitShapes(t *testing.T) {
 	}
 }
 
+// TestCteOuterIsReadStepsOverNonWordBytes pins the scanner's stepping: at
+// depth 0 every byte must advance the index. A revision of cteOuterIsRead
+// stalled on the space after WITH (the word scan consumed nothing and the
+// index never moved), which hung RowLimit on every SQL Server WITH
+// statement. The shapes below cover the stall points and the neighbours.
+func TestCteOuterIsReadStepsOverNonWordBytes(t *testing.T) {
+	cases := []struct {
+		sql  string
+		want bool
+	}{
+		{"WITH c AS (SELECT 1) SELECT * FROM c", true},
+		{"with c as (select 1) select * from c", true}, // lowercase keywords
+		{"WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c", false},
+		{"WITH c AS (SELECT 1) UPDATE t SET x = 1", false},
+		{"WITH c AS (SELECT 1) DELETE FROM t", false},
+		{"WITH c AS (SELECT 1) MERGE INTO t USING c ON 1=1", false},
+		{"WITH c AS (SELECT 1)\nSELECT * FROM c", true}, // newline at depth 0
+		{"WITH c AS (SELECT 1) -- comment\nSELECT * FROM c", true},
+		{"WITH x AS (SELECT 1), y AS (SELECT 2) SELECT * FROM x, y", true},
+		{"WITH x AS (SELECT 1 /* INSERT */) SELECT * FROM x", true},
+		{"WITH x AS (SELECT 'DELETE') SELECT * FROM x", true}, // keyword in string, depth 1
+		{"WITH x AS (SELECT 1) /* INSERT", false},             // unclosed block comment
+	}
+	for _, tc := range cases {
+		if got := cteOuterIsRead(tc.sql); got != tc.want {
+			t.Errorf("cteOuterIsRead(%q) = %v, want %v", tc.sql, got, tc.want)
+		}
+	}
+}
+
 func TestRenameStatementShapes(t *testing.T) {
 	if got, _ := RenameStatement(MySQL, "`db`.`a`", "`db`.`b`", "", "a", "b"); got != "RENAME TABLE `db`.`a` TO `db`.`b`" {
 		t.Errorf("mysql rename: %q", got)

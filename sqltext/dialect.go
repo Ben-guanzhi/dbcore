@@ -214,6 +214,12 @@ func cteOuterIsRead(s string) bool {
 				case "INSERT", "UPDATE", "DELETE", "MERGE":
 					return false
 				}
+				if i == start {
+					// A non-word byte at depth 0 (space, operator, newline,
+					// non-ASCII): step over it. Without this the scan stalls
+					// on the first one and never terminates.
+					i++
+				}
 			} else {
 				i++
 			}
