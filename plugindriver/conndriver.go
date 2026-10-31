@@ -402,15 +402,10 @@ func (c *Conn) BrowseRows(ctx context.Context, schema, table string, req *dbcore
 	if err != nil {
 		return nil, err
 	}
-	var payload ConnQueryResult
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("plugindriver: decode the browse result: %w", err)
-	}
 	result, err := DecodeConnQueryResult(raw)
 	if err != nil {
 		return nil, err
 	}
-	_ = payload
 	return &dbcore.TableRowsResult{Columns: result.Columns, Rows: result.Rows}, nil
 }
 
