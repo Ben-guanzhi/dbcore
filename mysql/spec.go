@@ -42,6 +42,12 @@ var customDialSeq atomic.Int64
 // Config.FormatDSN, so characters such as '@' or '/' are safe.
 func DSN(spec dbcore.ConnSpec) string {
 	cfg := drvmysql.NewConfig()
+	// Matched-rows semantics: go-sql-driver defaults to changed-rows, so a
+	// grid save writing an equal value (decimal "5.00" -> "5.0", timestamp
+	// spelling) reported 0 affected rows and consumers read it as "matched
+	// no row; data changed under us". PG and MSSQL count matched rows —
+	// this aligns MySQL with them.
+	cfg.ClientFoundRows = true
 	cfg.User = spec.User
 	cfg.Passwd = spec.Password
 	cfg.Net = "tcp"

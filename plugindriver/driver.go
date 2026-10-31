@@ -313,6 +313,10 @@ func (d *Driver) Dead() bool {
 	return d.readErr != nil
 }
 
+// closeGrace bounds the polite MethodClose round-trip before Close falls
+// through to killing the child.
+const closeGrace = 3 * time.Second
+
 // Close shuts the plugin down. It is idempotent and never blocks on a dead child.
 func (d *Driver) Close() error {
 	if d.closed.Load() {
@@ -322,7 +326,14 @@ func (d *Driver) Close() error {
 	// flag flips only after the call — call() refuses everything once the flag
 	// is up, so swapping first silently dropped the request and every plugin
 	// was killed without its chance to clean up.
-	_, _ = d.call(context.Background(), MethodClose, nil)
+	// The polite call gets a bounded window: a plugin that is alive but
+	// wedged (deadlocked on its own side) never answers MethodClose, and an
+	// unbounded wait hung Close — and the host's lazy-restart ensure() on
+	// top of it — forever. The kill path below reclaims the process either
+	// way ("never blocks on a dead child" now covers a hung live child too).
+	ctx, cancel := context.WithTimeout(context.Background(), closeGrace)
+	_, _ = d.call(ctx, MethodClose, nil)
+	cancel()
 	d.closed.Store(true)
 	_ = d.stdin.Close()
 	d.mu.Lock()
