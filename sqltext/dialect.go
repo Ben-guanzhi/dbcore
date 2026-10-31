@@ -169,13 +169,15 @@ func cteOuterIsRead(s string) bool {
 	for i := 0; i < len(s); {
 		c := s[i]
 		switch {
-		case c == '\\':
+		case c == '\'':
+			// String literal: skip to the closing quote (doubled '' is the
+			// T-SQL escaped quote). The previous scan only fired on a leading
+			// backslash, so plain literals were stepped through byte by byte
+			// and their parens moved the depth counter — '(' inside a literal
+			// lifted it and the outer SELECT was never found at depth 0,
+			// silently defeating the TOP wrap.
 			i++
 			for i < len(s) {
-				if s[i] == '\\' && i+1 < len(s) {
-					i += 2
-					continue
-				}
 				if s[i] == '\'' {
 					if i+1 < len(s) && s[i+1] == '\'' {
 						i += 2

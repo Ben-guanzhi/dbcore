@@ -188,7 +188,9 @@ func (d *MySQLDriver) ListIndexes(ctx context.Context, schema, table string) ([]
 		res, err = dbcore.RunQuery(ctx, d.db, mysqlIndexesWithoutExpressions, a)
 	}
 	if err != nil {
-		return nil, nil
+		// 重试也失败：传播而非吞成"无索引"——schemadiff 会把缺失索引
+		// 当成该删，静默半读快照产出 DROP 计划。
+		return nil, err
 	}
 	out := make([]dbcore.IndexInfo, 0, len(res.Rows))
 	index := make(map[string]int, len(res.Rows))
@@ -240,7 +242,7 @@ func (d *MySQLDriver) ListForeignKeys(ctx context.Context, schema, table string)
 	q, a := d.dialect.CatalogQuery(dbcore.CatalogForeignKeys, schema, table)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	out := make([]dbcore.ForeignKeyInfo, 0, len(res.Rows))
 	index := make(map[string]int, len(res.Rows))

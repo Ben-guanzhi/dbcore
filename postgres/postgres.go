@@ -182,7 +182,7 @@ func (d *PostgresDriver) ListIndexes(ctx context.Context, schema, table string) 
 	q, a := d.dialect.CatalogQuery(dbcore.CatalogIndexes, schema, table)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	out := make([]dbcore.IndexInfo, 0, len(res.Rows))
 	index := make(map[string]int, len(res.Rows))
@@ -234,7 +234,7 @@ func (d *PostgresDriver) ListForeignKeys(ctx context.Context, schema, table stri
 	q, a := d.dialect.CatalogQuery(dbcore.CatalogForeignKeys, schema, table)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	out := make([]dbcore.ForeignKeyInfo, 0, len(res.Rows))
 	index := make(map[string]int, len(res.Rows))

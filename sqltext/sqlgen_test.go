@@ -190,6 +190,15 @@ func TestCteOuterIsReadStepsOverNonWordBytes(t *testing.T) {
 		{"WITH x AS (SELECT 1 /* INSERT */) SELECT * FROM x", true},
 		{"WITH x AS (SELECT 'DELETE') SELECT * FROM x", true}, // keyword in string, depth 1
 		{"WITH x AS (SELECT 1) /* INSERT", false},             // unclosed block comment
+		// String literals: parens and keywords inside quotes must not move
+		// the depth counter or match keywords. Pre-fix, '(' in a literal
+		// lifted depth and RowLimit silently stopped wrapping the WITH —
+		// an unbounded read on exactly the statements the cap exists for.
+		{"WITH c AS (SELECT '(' AS x FROM t) SELECT * FROM c", true},
+		{"WITH c AS (SELECT ')' AS x FROM t) SELECT * FROM c", true},
+		{"WITH c AS (SELECT 'it''s ( fine') SELECT * FROM c", true},
+		{"WITH c AS (SELECT 'INSERT (') SELECT * FROM c", true},
+		{"WITH c AS (SELECT 1) SELECT * FROM c WHERE x = '(' AND y = 'INSERT'", true},
 	}
 	for _, tc := range cases {
 		if got := cteOuterIsRead(tc.sql); got != tc.want {
