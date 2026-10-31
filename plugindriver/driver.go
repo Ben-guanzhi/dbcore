@@ -14,6 +14,18 @@ import (
 	"github.com/dbcore/dbcore"
 )
 
+// streamPipe is one streaming request's pipe. dead is closed when the
+// consumer abandons the stream (unsubscribes): the readLoop then stops trying
+// to deliver frames — a bare channel send would block forever once the buffer
+// filled, and one wedged delivery stalls the whole plugin's readLoop.
+type streamPipe struct {
+	frames chan Response
+	dead   chan struct{}
+	once   sync.Once
+}
+
+func (p *streamPipe) abandon() { p.once.Do(func() { close(p.dead) }) }
+
 // Driver is a dbcore.SQLDriver backed by a plugin process.
 //
 // One process serves one connection: a plugin holds the database handle, so sharing
@@ -34,7 +46,7 @@ type Driver struct {
 	pending map[int64]chan Response
 	// streams maps a streaming request id to its channel; its frames arrive
 	// one by one until the terminal (Done) one retires it.
-	streams map[int64]chan Response
+	streams map[int64]*streamPipe
 	nextID  atomic.Int64
 
 	// kind is what the plugin's banner declared.
@@ -81,7 +93,7 @@ func StartWithOpts(ctx context.Context, path string, args []string, opts StartOp
 		stdin:   stdin,
 		stdout:  bufio.NewReaderSize(stdout, 1<<20),
 		pending: make(map[int64]chan Response),
-		streams: make(map[int64]chan Response),
+		streams: make(map[int64]*streamPipe),
 	}
 
 	banner, err := d.readBanner(opts.bannerTimeout())
@@ -187,16 +199,23 @@ func (d *Driver) readLoop() {
 				return
 			}
 			d.mu.Lock()
-			if sc, ok := d.streams[resp.ID]; ok {
-				// Streaming frame: keep the channel open until the terminal
-				// (Done) frame, then retire it.
-				if resp.Done {
-					delete(d.streams, resp.ID)
+			sc, ok := d.streams[resp.ID]
+			if ok && resp.Done {
+				// Terminal frame: retire the stream after delivery.
+				delete(d.streams, resp.ID)
+			}
+			d.mu.Unlock()
+			if ok {
+				// Deliver, but never on a nobody: an abandoned stream's dead
+				// channel wins over a full buffer, so a wedged delivery
+				// cannot stall the readLoop (and with it every later call).
+				select {
+				case sc.frames <- resp:
+				case <-sc.dead:
 				}
-				d.mu.Unlock()
-				sc <- resp
 				continue
 			}
+			d.mu.Lock()
 			ch, ok := d.pending[resp.ID]
 			delete(d.pending, resp.ID)
 			d.mu.Unlock()
@@ -224,13 +243,17 @@ func (d *Driver) failAll(err error) {
 	waiting := d.pending
 	d.pending = make(map[int64]chan Response)
 	streaming := d.streams
-	d.streams = make(map[int64]chan Response)
+	d.streams = make(map[int64]*streamPipe)
 	d.mu.Unlock()
 	for _, ch := range waiting {
 		ch <- Response{Error: err.Error()}
 	}
-	for _, ch := range streaming {
-		ch <- Response{Error: err.Error(), Done: true}
+	for _, pipe := range streaming {
+		pipe.abandon() // a wedged delivery must not outlive the failure
+		select {
+		case pipe.frames <- Response{Error: err.Error(), Done: true}:
+		case <-pipe.dead:
+		}
 	}
 }
 
@@ -339,10 +362,14 @@ func (d *Driver) Close() error {
 	d.mu.Lock()
 	d.pending = make(map[int64]chan Response)
 	streaming := d.streams
-	d.streams = make(map[int64]chan Response)
+	d.streams = make(map[int64]*streamPipe)
 	d.mu.Unlock()
-	for _, ch := range streaming {
-		ch <- Response{Error: "plugindriver: shut down", Done: true}
+	for _, pipe := range streaming {
+		pipe.abandon()
+		select {
+		case pipe.frames <- Response{Error: "plugindriver: shut down", Done: true}:
+		case <-pipe.dead:
+		}
 	}
 	if d.cmd.Process != nil {
 		_ = d.cmd.Process.Kill()

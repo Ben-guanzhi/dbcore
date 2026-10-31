@@ -119,9 +119,10 @@ func AlterColumn(dbType, schema, table string, from, to Column) []string {
 
 	default: // SQL Server and Oracle
 		var out []string
+		oracle := sqltext.Normalize(dbType) == sqltext.Oracle
 		if typeChanged || nullChanged {
 			clause := "ALTER TABLE " + object + " ALTER COLUMN " + column
-			if sqltext.Normalize(dbType) == sqltext.Oracle {
+			if oracle {
 				clause = "ALTER TABLE " + object + " MODIFY (" + column
 			}
 			clause += " " + strings.TrimSpace(to.Type)
@@ -130,10 +131,30 @@ func AlterColumn(dbType, schema, table string, from, to Column) []string {
 			} else {
 				clause += " NOT NULL"
 			}
-			if sqltext.Normalize(dbType) == sqltext.Oracle {
+			if oracle {
+				// MODIFY restates the whole column: an omitted default would
+				// silently RESET it on every type/nullability change. The
+				// desired default therefore travels with every Oracle MODIFY
+				// — the same rule the MySQL branch documents for columnDef.
+				if value := strings.TrimSpace(to.DefaultValue); value == "" {
+					clause += " DEFAULT NULL"
+				} else {
+					clause += " DEFAULT " + NormalizeDefault(dbType, value)
+				}
 				clause += ")"
 			}
 			out = append(out, clause+";")
+		} else if defaultChanged && oracle {
+			// Default-only change on Oracle (CanAlterColumnDefault: yes):
+			// this branch used to fall through and return EMPTY — a silent
+			// no-op on an engine that modifies defaults in place. SQL Server
+			// stores a default as a named constraint and is excluded by
+			// CanAlterColumnDefault — the consumer reports, not invents.
+			if value := strings.TrimSpace(to.DefaultValue); value == "" {
+				out = append(out, "ALTER TABLE "+object+" MODIFY ("+column+" DEFAULT NULL);")
+			} else {
+				out = append(out, "ALTER TABLE "+object+" MODIFY ("+column+" DEFAULT "+NormalizeDefault(dbType, value)+");")
+			}
 		}
 		return out
 	}

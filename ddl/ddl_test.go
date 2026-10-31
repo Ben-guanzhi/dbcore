@@ -107,3 +107,37 @@ func TestNormalizeDefault(t *testing.T) {
 		}
 	}
 }
+
+// TestAlterColumnOracleDefaultOnly pins the default-only shape on Oracle:
+// CanAlterColumnDefault("oracle") is true, so a default-only change must emit
+// a MODIFY with the new default — the pre-fix branch fell through to an empty
+// result, a silent no-op. SQL Server is excluded by the predicate (a default
+// is a named constraint there), so an empty result is its correct answer.
+func TestAlterColumnOracleDefaultOnly(t *testing.T) {
+	from := Column{Name: "status", Type: "VARCHAR2(10)", Nullable: true, DefaultValue: "'A'"}
+	to := Column{Name: "status", Type: "VARCHAR2(10)", Nullable: true, DefaultValue: "'B'"}
+	got := AlterColumn("oracle", "", "t", from, to)
+	want := []string{`ALTER TABLE "t" MODIFY ("status" DEFAULT 'B');`}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("oracle default-only = %v, want %v", got, want)
+	}
+
+	// Dropping the default entirely.
+	drop := AlterColumn("oracle", "", "t", from, Column{Name: "status", Type: "VARCHAR2(10)", Nullable: true})
+	if len(drop) != 1 || drop[0] != "ALTER TABLE \"t\" MODIFY (\"status\" DEFAULT NULL);" {
+		t.Fatalf("oracle default drop = %v", drop)
+	}
+
+	// SQL Server default-only stays empty: the consumer reports the
+	// limitation via CanAlterColumnDefault instead of inventing a name.
+	if got := AlterColumn("sqlserver", "", "t", from, to); len(got) != 0 {
+		t.Fatalf("sqlserver default-only = %v, want empty", got)
+	}
+
+	// A combined type+default change keeps the whole-column MODIFY, which
+	// restates the default via columnDef.
+	mixed := AlterColumn("oracle", "", "t", from, Column{Name: "status", Type: "VARCHAR2(20)", Nullable: true, DefaultValue: "'B'"})
+	if len(mixed) != 1 || !strings.Contains(mixed[0], "VARCHAR2(20)") || !strings.Contains(mixed[0], "DEFAULT 'B'") {
+		t.Fatalf("oracle mixed = %v", mixed)
+	}
+}

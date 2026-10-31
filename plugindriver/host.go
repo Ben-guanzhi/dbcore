@@ -81,19 +81,22 @@ func (d *Driver) CallStream(
 	if err != nil {
 		return fmt.Errorf("plugindriver: encode request: %w", err)
 	}
-	ch := make(chan Response, 8)
+	pipe := &streamPipe{frames: make(chan Response, 8), dead: make(chan struct{})}
 	d.mu.Lock()
 	if d.closed.Load() {
 		d.mu.Unlock()
 		return fmt.Errorf("plugindriver: driver is closed")
 	}
-	d.streams[id] = ch
+	d.streams[id] = pipe
 	d.mu.Unlock()
 
 	stop := func() {
 		d.mu.Lock()
 		delete(d.streams, id)
 		d.mu.Unlock()
+		// Signal the readLoop: after this, frames for the stream are dropped
+		// on the floor instead of piling up behind a reader that is gone.
+		pipe.abandon()
 	}
 	defer stop()
 
@@ -106,7 +109,7 @@ func (d *Driver) CallStream(
 
 	for {
 		select {
-		case resp := <-ch:
+		case resp := <-pipe.frames:
 			if resp.Error != "" {
 				return pluginError(resp)
 			}
