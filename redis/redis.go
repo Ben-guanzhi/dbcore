@@ -155,24 +155,38 @@ func (d *RedisDriver) ScanKeysEnriched(ctx context.Context, cursor uint64, patte
 		if err != nil {
 			return nil, err
 		}
-		for _, k := range keys {
-			typ, err := d.client.Type(ctx, k).Result()
-			if err != nil {
+		if len(keys) > 0 {
+			// TYPE + TTL were one round trip per key: a page of 100 keys paid
+			// 200+ serial RTTs. One pipeline serves the whole batch.
+			pipe := d.client.Pipeline()
+			typeCmds := make([]*goredis.StatusCmd, len(keys))
+			ttlCmds := make([]*goredis.DurationCmd, len(keys))
+			for i, k := range keys {
+				typeCmds[i] = pipe.Type(ctx, k)
+				ttlCmds[i] = pipe.TTL(ctx, k)
+			}
+			if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, goredis.Nil) {
 				return nil, err
 			}
-			ttl := d.client.TTL(ctx, k).Val()
-			// go-redis returns -1ns / -2ns for the no-expiry and missing
-			// sentinels; positive values are whole seconds. Dividing a negative
-			// would truncate -1ns to 0, so negatives keep their raw value.
-			ttlSec := int64(ttl / time.Second)
-			if ttl < 0 {
-				ttlSec = int64(ttl)
+			for i, k := range keys {
+				typ, err := typeCmds[i].Result()
+				if err != nil {
+					return nil, err
+				}
+				ttl := ttlCmds[i].Val()
+				// go-redis returns -1ns / -2ns for the no-expiry and missing
+				// sentinels; positive values are whole seconds. Dividing a negative
+				// would truncate -1ns to 0, so negatives keep their raw value.
+				ttlSec := int64(ttl / time.Second)
+				if ttl < 0 {
+					ttlSec = int64(ttl)
+				}
+				page.Keys = append(page.Keys, dbcore.RedisKeyEntry{
+					Key:  k,
+					Kind: redisKeyType(typ),
+					TTL:  &ttlSec,
+				})
 			}
-			page.Keys = append(page.Keys, dbcore.RedisKeyEntry{
-				Key:  k,
-				Kind: redisKeyType(typ),
-				TTL:  &ttlSec,
-			})
 		}
 		cursor = next
 		if cursor == 0 || len(page.Keys) >= count {

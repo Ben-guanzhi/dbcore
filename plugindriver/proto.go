@@ -79,10 +79,6 @@ const (
 	MethodCreateTableDB = "createTableSQL"
 	MethodBrowseRows    = "browseRows"
 	MethodBrowseCount   = "browseRowsCount"
-	MethodBegin         = "begin"
-	MethodExecuteIn     = "executeIn"
-	MethodCommit        = "commit"
-	MethodRollback      = "rollback"
 )
 
 // ---------- parameter and result payloads ----------
@@ -245,17 +241,6 @@ func DecodeValue(c CellPayload) (dbcore.Value, error) {
 		return dbcore.Value{Kind: dbcore.ValDecimal, S: c.Text}, nil
 	}
 	return dbcore.Value{}, fmt.Errorf("plugindriver: unknown cell kind %q", c.Kind)
-}
-
-func encodeColumn(c dbcore.ColumnInfo) ColumnPayload {
-	return ColumnPayload{
-		Name:         c.Name,
-		Type:         c.Type,
-		Nullable:     c.Nullable,
-		Default:      c.Default,
-		IsPrimaryKey: c.IsPrimaryKey,
-		Comment:      c.Comment,
-	}
 }
 
 func decodeColumn(c ColumnPayload) dbcore.ColumnInfo {

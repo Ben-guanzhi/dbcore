@@ -133,22 +133,6 @@ func (d *ConnDriver) Close() error { return d.proc.Close() }
 func (d *ConnDriver) AsSQL() (dbcore.SQLDriver, bool) { return nil, false }
 func (d *ConnDriver) AsKV() (dbcore.KVDriver, bool)   { return nil, false }
 
-// connID is the connection this call addresses. The connection-oriented driver
-// is used through a bound view (Conn), so the id is already fixed.
-func (d *ConnDriver) connID() string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.conns) == 0 {
-		return ""
-	}
-	// The single-connection case is the common one: the host binds one
-	// connection per driver instance.
-	for id := range d.conns {
-		return id
-	}
-	return ""
-}
-
 // The connection-oriented method names, as the deployed plugin binaries answer
 // them (fynequery's). The kernel's own names for the same calls live in
 // connproto.go; a plugin written for the kernel answers those instead.
@@ -355,13 +339,6 @@ func (c *Conn) ListTables(ctx context.Context, schema string) ([]dbcore.TableInf
 		return nil, err
 	}
 	return DecodeConnObject(raw)
-}
-
-// connObjectList is the shape a plugin answers the tables call with: an object
-// list under a key, the way the fynequery protocol has always wrapped it. The
-// kernel's own set answers with a bare array, so both are accepted.
-type connObjectList struct {
-	Objects []ConnObject `json:"objects"`
 }
 
 func (c *Conn) ListColumns(ctx context.Context, schema, table string) ([]dbcore.ColumnInfo, error) {

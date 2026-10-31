@@ -368,29 +368,6 @@ func (l SQLiteDialect) appendWhere(b *strings.Builder, req *dbcore.TableRowsRequ
 	return args
 }
 
-func appendSortLimit(b *strings.Builder, d dbcore.Dialect, req *dbcore.TableRowsRequest) {
-	if len(req.Sort) > 0 {
-		b.WriteString(" ORDER BY ")
-		for i, s := range req.Sort {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(d.QuoteIdent(s.Column))
-			if s.Desc {
-				b.WriteString(" DESC")
-			}
-		}
-	}
-	limit, offset := req.PageSize, 0
-	if req.Page > 1 {
-		offset = (req.Page - 1) * req.PageSize
-	}
-	if clause := d.LimitOffset(limit, offset); clause != "" {
-		b.WriteString(" ")
-		b.WriteString(clause)
-	}
-}
-
 func (l SQLiteDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) (string, []dbcore.Value) {
 	switch kind {
 	case dbcore.CatalogTables:
