@@ -411,7 +411,15 @@ func PreviewPageQuery(dbType, database, schema, table, where, orderBy string, li
 	case MySQL, Postgres, SQLite:
 		return fmt.Sprintf("SELECT * FROM %s%s%s LIMIT %d OFFSET %d", name, where, orderBy, limit, offset), nil, nil
 	case SQLServer, Oracle:
-		return fmt.Sprintf("SELECT * FROM %s%s%s OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", name, where, orderBy, offset, limit), nil, nil
+		// T-SQL requires an ORDER BY before OFFSET/FETCH; the mssql driver
+		// pads the empty sort at its own layer, but this path builds the
+		// statement itself and used to emit bare OFFSET — invalid SQL.
+		// Oracle accepts it either way, so padding is harmless there.
+		sortClause := orderBy
+		if sortClause == "" {
+			sortClause = " ORDER BY (SELECT NULL)"
+		}
+		return fmt.Sprintf("SELECT * FROM %s%s%s OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", name, where, sortClause, offset, limit), nil, nil
 	default:
 		return "", nil, fmt.Errorf("unsupported type: %s", dbType)
 	}
