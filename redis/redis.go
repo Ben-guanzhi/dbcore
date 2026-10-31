@@ -60,7 +60,13 @@ func Open(dsn string) (*RedisDriver, error) {
 // sentinel/cluster-adjacent tuning and tests).
 func OpenOptions(opts *goredis.Options) (*RedisDriver, error) {
 	c := goredis.NewClient(opts)
-	if err := c.Ping(context.Background()).Err(); err != nil {
+	// Bounded first ping: DialTimeout only covers the TCP connect — a server
+	// that accepts the socket but never answers PING used to hang the dial
+	// goroutine forever (the progress dialog is long gone by then).
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := c.Ping(pingCtx).Err()
+	cancel()
+	if err != nil {
 		_ = c.Close()
 		return nil, err
 	}

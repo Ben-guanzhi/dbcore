@@ -169,6 +169,13 @@ func rowLimitSQLServer(query string, limit int) string {
 	return fmt.Sprintf("SELECT TOP (%d)%s", limit, trimmed[len("SELECT"):])
 }
 
+// CteOuterIsRead is the exported face of cteOuterIsRead: consumers with
+// their own LIMIT dialects (fynequery's auto-limit) need the same
+// outermost-statement verdict so a WITH ... INSERT never gets a cap.
+func CteOuterIsRead(s string) bool {
+	return cteOuterIsRead(s)
+}
+
 // cteOuterIsRead reports whether a WITH statement's outermost statement -
 // the keyword at paren depth 0 after the CTE list - is a SELECT. The scan
 // skips string literals, quoted identifiers and comments; the outer keyword
@@ -258,6 +265,12 @@ func rowLimitOracle(query string, limit int) string {
 		return query
 	}
 	if queryOwnLimit(trimmed) {
+		return query
+	}
+	// A WITH statement is wrapped only when its outermost statement is a
+	// read: wrapping WITH ... INSERT into a ROWNUM subquery produces SQL
+	// that cannot execute (and would truncate the write if it could).
+	if !strings.HasPrefix(upper, "SELECT") && !cteOuterIsRead(trimmed) {
 		return query
 	}
 	return fmt.Sprintf("SELECT * FROM (%s) WHERE ROWNUM <= %d", trimmed, limit)

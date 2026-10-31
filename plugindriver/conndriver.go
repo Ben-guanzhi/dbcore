@@ -279,7 +279,14 @@ func (c *Conn) Ping(ctx context.Context) error {
 	_, err := c.driver.proc.call(ctx, MethodPing, nil)
 	return err
 }
-func (c *Conn) Close() error                    { return c.driver.CloseConn(context.Background(), c.connID) }
+
+// Close is bounded like the process-level Close (closeGrace): a hung plugin
+// must not hold the session's pool slot forever.
+func (c *Conn) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), closeGrace)
+	defer cancel()
+	return c.driver.CloseConn(ctx, c.connID)
+}
 func (c *Conn) AsSQL() (dbcore.SQLDriver, bool) { return c, true }
 func (c *Conn) AsKV() (dbcore.KVDriver, bool)   { return nil, false }
 
