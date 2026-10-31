@@ -158,6 +158,18 @@ func TestRowLimitShapes(t *testing.T) {
 	if got := RowLimit(MySQL, "SELECT * FROM t;", 5); got != "SELECT * FROM t LIMIT 5" {
 		t.Errorf("trailing semicolon must go: %q", got)
 	}
+	// A data-modifying CTE must not take a trailing LIMIT: MySQL and
+	// PostgreSQL accept the spelling, and the cap would silently truncate
+	// the write. The SQL Server arm has had this guard since wave 16; the
+	// LIMIT dialects were missing it until wave 40.
+	for _, engine := range []string{MySQL, Postgres, SQLite} {
+		if got := RowLimit(engine, "WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c", 5); got != "WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c" {
+			t.Errorf("%s DML CTE must run untouched: %q", engine, got)
+		}
+		if got := RowLimit(engine, "WITH c AS (SELECT 1) SELECT * FROM c", 5); got != "WITH c AS (SELECT 1) SELECT * FROM c LIMIT 5" {
+			t.Errorf("%s read CTE should cap: %q", engine, got)
+		}
+	}
 	for _, capped := range []string{"SELECT * FROM t LIMIT 9", "WITH c AS (SELECT 1 LIMIT 1) SELECT * FROM c", "UPDATE t SET x = 1"} {
 		if got := RowLimit(MySQL, capped, 5); got != capped {
 			t.Errorf("RowLimit touched %q -> %q", capped, got)

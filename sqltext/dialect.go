@@ -130,6 +130,16 @@ func rowLimitLimit(query string, limit int) string {
 	if queryOwnLimit(trimmed) {
 		return query
 	}
+	if !strings.HasPrefix(upper, "SELECT") {
+		// WITH statement: only a read CTE takes a trailing LIMIT — appending
+		// one to WITH ... INSERT/UPDATE/DELETE truncates the write (MySQL and
+		// PostgreSQL accept the spelling). The SQL Server arm has the same
+		// guard through cteOuterIsRead.
+		if cteOuterIsRead(trimmed) {
+			return fmt.Sprintf("%s LIMIT %d", trimmed, limit)
+		}
+		return query
+	}
 	return fmt.Sprintf("%s LIMIT %d", trimmed, limit)
 }
 
