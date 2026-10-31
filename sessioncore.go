@@ -22,6 +22,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -273,11 +274,7 @@ func sortedCols(m map[string]Value) []string {
 }
 
 func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
+	sort.Strings(s)
 }
 
 // ---- batch DML -------------------------------------------------------------
