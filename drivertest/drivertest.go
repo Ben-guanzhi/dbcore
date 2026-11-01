@@ -315,6 +315,75 @@ func (h Harness) Run(t *testing.T) {
 		}
 	})
 
+	// QueryInTx streams a query through the transaction's own handle, with the
+	// same remove/reinsert serialization as ExecuteInTx: while the rows are
+	// open the entry is detached, so parallel statements are refused and the
+	// sweeper cannot reclaim the transaction mid-stream.
+	t.Run("tx_query_stream_inside_tx", func(t *testing.T) {
+		tm := dbcore.NewTxManager(drv)
+		defer tm.Close()
+		info, err := tm.Begin(ctx, dbcore.TxMode{})
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		const probeID = int64(99001)
+		if _, err := tm.ExecuteInTx(ctx, info.ID,
+			fmt.Sprintf("INSERT INTO %s(id,name) VALUES (%s,%s)", name, q(1), q(2)),
+			dbcore.Value{Kind: dbcore.ValInt, I: probeID}, dbcore.Value{Kind: dbcore.ValText, S: "streamed"},
+		); err != nil {
+			t.Fatalf("execute in tx: %v", err)
+		}
+		// The uncommitted row is visible only through the transaction's handle:
+		// a stream that read from the pool would see zero rows.
+		txRows, err := tm.QueryInTx(ctx, info.ID,
+			fmt.Sprintf("SELECT id FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: probeID})
+		if err != nil {
+			t.Fatalf("query in tx: %v", err)
+		}
+		// Never leak the open tx: a subtest that aborts before Close leaves the
+		// transaction holding its connection, and per-connection :memory: pools
+		// then hand later subtests an empty database.
+		defer txRows.Close()
+		count := 0
+		for txRows.Next() {
+			count++
+		}
+		if err := txRows.Err(); err != nil {
+			t.Fatalf("rows err: %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("streamed %d rows inside tx, want 1 (statement must run on the tx handle)", count)
+		}
+		// The query text never reaches the engine here: the registry refuses the
+		// parallel statement while the stream holds the entry.
+		if _, err := tm.ExecuteInTx(ctx, info.ID, "SELECT 1"); !IsNotFound(err) {
+			t.Fatalf("parallel execute during stream err = %v, want ErrTransactionNotFound", err)
+		}
+		// The sweeper cannot reclaim a streaming tx: the entry is detached
+		// while the rows are open, so the sweep passes it by — and the commit
+		// below still succeeds (a tx rolled back mid-stream could not be
+		// committed, and its row would be gone).
+		tm.SetIdleTTL(-time.Second) // any tx is instantly "idle"
+		tm.SweepNow()
+		if err := txRows.Close(); err != nil {
+			t.Fatalf("close stream: %v", err)
+		}
+		// After Close the entry is back and commit finalizes the transaction.
+		if err := tm.Commit(info.ID); err != nil {
+			t.Fatalf("commit after stream close: %v", err)
+		}
+		res, err := drv.Execute(ctx,
+			fmt.Sprintf("SELECT id FROM %s WHERE id = %s", name, q(1)),
+			dbcore.Value{Kind: dbcore.ValInt, I: probeID})
+		if err != nil {
+			t.Fatalf("verify execute: %v", err)
+		}
+		if len(res.Rows) != 1 {
+			t.Fatalf("committed tx row not visible after commit: %d rows", len(res.Rows))
+		}
+	})
+
 	t.Run("tx_idle_sweep_reclaims", func(t *testing.T) {
 		tm := dbcore.NewTxManager(drv)
 		defer tm.Close()

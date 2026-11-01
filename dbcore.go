@@ -331,6 +331,66 @@ func (m *TxManager) ExecuteInTx(ctx context.Context, id, query string, args ...V
 	return res, err
 }
 
+// TxRows is the streaming handle returned by QueryInTx: it embeds *sql.Rows, so
+// the caller reads it like any row cursor, and Close additionally returns the
+// transaction's entry to the registry.
+type TxRows struct {
+	*sql.Rows
+	restoreOnce sync.Once
+	restore     func()
+}
+
+// Close releases the rows and returns the transaction to the registry. The
+// restore runs exactly once even if Close is called more than once (the
+// embedded *sql.Rows.Close is itself idempotent).
+func (t *TxRows) Close() error {
+	err := t.Rows.Close()
+	t.restoreOnce.Do(t.restore)
+	return err
+}
+
+// QueryInTx issues a streaming query inside the transaction identified by id,
+// the streaming counterpart of ExecuteInTx for statements whose result set is
+// read row by row. Like ExecuteInTx the entry is taken out of the registry while
+// the statement is live: a parallel statement on the same transaction sees
+// ErrTransactionNotFound instead of interleaving on the single *sql.Tx, and the
+// sweeper cannot reclaim the transaction mid-stream. The entry returns when the
+// returned rows are closed (or when QueryContext fails immediately); the
+// transaction is still finalized through Commit/Rollback afterwards.
+func (m *TxManager) QueryInTx(ctx context.Context, id string, query string, args ...Value) (*TxRows, error) {
+	m.mu.Lock()
+	e, ok := m.txs[id]
+	if !ok || e.status != TxnActive {
+		m.mu.Unlock()
+		return nil, ErrTransactionNotFound
+	}
+	delete(m.txs, id)
+	m.mu.Unlock()
+
+	anyArgs := make([]any, len(args))
+	for i, a := range args {
+		anyArgs[i] = nativeFromValue(a)
+	}
+	rows, err := e.tx.QueryContext(ctx, query, anyArgs...)
+	if err != nil {
+		m.reinsert(e)
+		return nil, err
+	}
+	return &TxRows{Rows: rows, restore: func() { m.reinsert(e) }}, nil
+}
+
+// reinsert returns an entry taken out for a statement back to the registry and
+// refreshes its idle clock. The exists guard only matters if the entry was
+// finalized while detached (RollbackAll), in which case it must not come back.
+func (m *TxManager) reinsert(e *txEntry) {
+	m.mu.Lock()
+	if _, exists := m.txs[e.id]; !exists {
+		e.lastActive = time.Now()
+		m.txs[e.id] = e
+	}
+	m.mu.Unlock()
+}
+
 // Info returns the current status; ErrTransactionNotFound if not present.
 func (m *TxManager) Info(id string) (*TransactionInfo, error) {
 	m.mu.Lock()
