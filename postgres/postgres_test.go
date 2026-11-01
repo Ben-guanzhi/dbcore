@@ -62,3 +62,43 @@ func TestBuildRowsQueryNilRequest(t *testing.T) {
 		t.Fatal("nil request built an empty count query")
 	}
 }
+
+// A serial column's type already is the sequence mechanism: adding
+// GENERATED ALWAYS AS IDENTITY on top is a syntax error, so the clause is
+// reserved for real identity columns.
+func TestRenderCreateColumnsSerialVsIdentity(t *testing.T) {
+	quote := func(s string) string { return `"` + s + `"` }
+	nextval := "nextval('users_id_seq'::regclass)"
+
+	// Serial: nextval default, no IDENTITY clause.
+	cols := []dbcore.ColumnInfo{{Name: "id", Type: "integer", Nullable: false,
+		IsAutoIncrement: true, IdentityKind: "serial", Default: &nextval}}
+	got := renderCreateColumns(cols, quote)
+	if strings.Contains(got, "IDENTITY") {
+		t.Errorf("a serial column must not get GENERATED ALWAYS AS IDENTITY:\n%s", got)
+	}
+	if !strings.Contains(got, "DEFAULT nextval('users_id_seq'::regclass)") {
+		t.Errorf("a serial column keeps its nextval default:\n%s", got)
+	}
+
+	// Real identity: the clause is present and no nextval default.
+	ident := []dbcore.ColumnInfo{{Name: "id", Type: "integer", Nullable: false,
+		IsAutoIncrement: true, IdentityKind: "identity"}}
+	got = renderCreateColumns(ident, quote)
+	if !strings.Contains(got, "GENERATED ALWAYS AS IDENTITY") {
+		t.Errorf("an identity column must get the clause:\n%s", got)
+	}
+
+	// Mixed: each column rendered by its own kind.
+	mixed := []dbcore.ColumnInfo{
+		{Name: "id", Type: "integer", Nullable: false, IsAutoIncrement: true, IdentityKind: "identity"},
+		{Name: "code", Type: "text", Nullable: true},
+	}
+	got = renderCreateColumns(mixed, quote)
+	if !strings.Contains(got, `"id" integer GENERATED ALWAYS AS IDENTITY NOT NULL`) {
+		t.Errorf("identity column wrong:\n%s", got)
+	}
+	if !strings.Contains(got, `"code" text NULL`) {
+		t.Errorf("plain column wrong:\n%s", got)
+	}
+}

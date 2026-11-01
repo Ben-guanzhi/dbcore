@@ -169,6 +169,16 @@ func (d *PostgresDriver) ListColumns(ctx context.Context, schema, table string) 
 			s := r[3].S
 			ci.Default = &s
 		}
+		// Distinguish a real identity column from a serial one: serial's type
+		// already carries the sequence, and CreateTableSQL must not add
+		// GENERATED ALWAYS AS IDENTITY on top of it.
+		if ci.IsAutoIncrement {
+			if ci.Default != nil && strings.HasPrefix(*ci.Default, "nextval(") {
+				ci.IdentityKind = "serial"
+			} else {
+				ci.IdentityKind = "identity"
+			}
+		}
 		out = append(out, ci)
 	}
 	return out, nil
@@ -281,28 +291,9 @@ func (d *PostgresDriver) CreateTableSQL(ctx context.Context, schema, table strin
 	b.WriteString("CREATE TABLE ")
 	b.WriteString(d.dialect.QuoteIdent(schema, table))
 	b.WriteString(" (\n")
-	for i, c := range cols {
-		b.WriteString("    ")
-		b.WriteString(d.dialect.QuoteIdent(c.Name))
-		b.WriteString(" ")
-		b.WriteString(c.Type)
-		if c.IsAutoIncrement {
-			b.WriteString(" GENERATED ALWAYS AS IDENTITY")
-		}
-		if c.Nullable {
-			b.WriteString(" NULL")
-		} else {
-			b.WriteString(" NOT NULL")
-		}
-		if c.Default != nil && *c.Default != "" {
-			b.WriteString(" DEFAULT ")
-			b.WriteString(*c.Default)
-		}
-		if i < len(cols)-1 {
-			b.WriteString(",")
-		}
-		b.WriteString("\n")
-	}
+	b.WriteString(renderCreateColumns(cols, func(s string) string {
+		return d.dialect.QuoteIdent(s)
+	}))
 	b.WriteString(")")
 
 	q, a := d.dialect.CatalogQuery(dbcore.CatalogPrimaryKey, schema, table)
@@ -322,6 +313,40 @@ func (d *PostgresDriver) CreateTableSQL(ctx context.Context, schema, table strin
 		b.WriteString(")")
 	}
 	return b.String(), nil
+}
+
+// renderCreateColumns renders the column list of a CREATE TABLE for
+// PostgreSQL. Kept pure (quotedIdent injected) so the serial/identity rule is
+// testable without a live server.
+//
+// Only a real identity column takes GENERATED ALWAYS AS IDENTITY: a serial
+// column's type already is the sequence mechanism, and adding the clause on
+// top is a syntax error ("cannot create identity column of type serial").
+func renderCreateColumns(cols []dbcore.ColumnInfo, quotedIdent func(string) string) string {
+	var b strings.Builder
+	for i, c := range cols {
+		b.WriteString("    ")
+		b.WriteString(quotedIdent(c.Name))
+		b.WriteString(" ")
+		b.WriteString(c.Type)
+		if c.IdentityKind == "identity" {
+			b.WriteString(" GENERATED ALWAYS AS IDENTITY")
+		}
+		if c.Nullable {
+			b.WriteString(" NULL")
+		} else {
+			b.WriteString(" NOT NULL")
+		}
+		if c.Default != nil && *c.Default != "" {
+			b.WriteString(" DEFAULT ")
+			b.WriteString(*c.Default)
+		}
+		if i < len(cols)-1 {
+			b.WriteString(",")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func (d *PostgresDriver) BrowseRows(ctx context.Context, schema, table string, req *dbcore.TableRowsRequest) (*dbcore.TableRowsResult, error) {

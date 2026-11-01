@@ -47,6 +47,15 @@ type ColumnInfo struct {
 	// GENERATED ... AS IDENTITY, is_identity, identity_column) and PostgreSQL
 	// serial columns, whose default is nextval(...) over the column's sequence.
 	IsAutoIncrement bool
+	// IdentityKind distinguishes how a column auto-increments, for clients that
+	// must render the CREATE statement back (CreateTableSQL). Empty means "not
+	// an auto-increment column"; "identity" means a real GENERATED ... AS
+	// IDENTITY column; "serial" means a PostgreSQL serial column — its type
+	// IS the sequence mechanism, so adding GENERATED ALWAYS AS IDENTITY on
+	// top of it is a syntax error ("cannot create identity column of type
+	// serial"). Only the PostgreSQL driver fills it; the other engines leave
+	// it empty and keep using IsAutoIncrement alone.
+	IdentityKind string
 }
 
 // DisambiguateColumnNames makes duplicate column names unique, in place, and
