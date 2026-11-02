@@ -137,6 +137,36 @@ func (d *SQLiteDriver) ListColumns(ctx context.Context, schema, table string) ([
 	return out, nil
 }
 
+// BatchColumns reads every table's and view's columns in one round trip
+// (BatchColumnsReader). Row shape = CatalogColumns with the table name
+// prepended, so the per-column mapping is the ListColumns mapping shifted by
+// one position.
+func (d *SQLiteDriver) BatchColumns(ctx context.Context, schema string) ([]dbcore.ColumnInfo, error) {
+	q, _ := d.dialect.CatalogQuery(dbcore.CatalogBatchColumns, schema, "")
+	res, err := dbcore.RunQuery(ctx, d.db, q, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.ColumnInfo, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		ci := dbcore.ColumnInfo{
+			Table:        r[0].S,
+			Name:         r[1].S,
+			Type:         r[2].S,
+			Nullable:     r[3].I == 0,
+			IsPrimaryKey: r[5].I > 0, // pragma_table_info.pk: 0 = not in the PK, n = PK position
+			// r[6] = cid + 1; see ListColumns for the auto-increment note.
+			OrdinalPosition: int32(r[6].I),
+		}
+		if r[4].Kind != dbcore.ValNull {
+			s := r[4].S
+			ci.Default = &s
+		}
+		out = append(out, ci)
+	}
+	return out, nil
+}
+
 func (d *SQLiteDriver) ListIndexes(ctx context.Context, schema, table string) ([]dbcore.IndexInfo, error) {
 	// The index list and the stored CREATE INDEX text come from one query so a
 	// partial/expression index can be described without a second lookup.
@@ -375,6 +405,18 @@ func (l SQLiteDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string)
 	case dbcore.CatalogColumns:
 		// pragma_table_info is a table-valued function; the table name is a BOUND parameter (P0-4 safe).
 		return `SELECT name, type, "notnull", dflt_value, pk, cid + 1 FROM pragma_table_info(?)`, []dbcore.Value{{Kind: dbcore.ValText, S: obj}}
+	case dbcore.CatalogBatchColumns:
+		// CatalogColumns with the table name prepended, one round trip for the
+		// whole schema. Views included: CatalogTables lists them and
+		// pragma_table_info works on them, so batch must cover the same names.
+		// The LIKE filter mirrors CatalogTables verbatim (no ESCAPE) so the two
+		// paths' name sets can never diverge — drivertest catalog_batch holds
+		// them side by side.
+		return `SELECT t.name, c.name, c.type, c."notnull", c.dflt_value, c.pk, c.cid + 1
+			FROM sqlite_master t
+			JOIN pragma_table_info(t.name) c
+			WHERE t.type IN ('table','view') AND t.name NOT LIKE 'sqlite_%'
+			ORDER BY t.name, c.cid`, nil
 	case dbcore.CatalogIndexes:
 		return `SELECT name, "unique", origin FROM pragma_index_list(?)`, []dbcore.Value{{Kind: dbcore.ValText, S: obj}}
 	case dbcore.CatalogForeignKeys:

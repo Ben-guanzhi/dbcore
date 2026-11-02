@@ -43,4 +43,11 @@ const (
 	// CatalogPrimaryKey lists the primary-key constraint and its columns; used by
 	// engines that reconstruct DDL from the catalog (SQL Server).
 	CatalogPrimaryKey
+	// CatalogBatchColumns is the schema-wide form of CatalogColumns: one round
+	// trip for every table's and view's columns, row shape identical to
+	// CatalogColumns with the table name PREPENDED (column 0 = table name).
+	// Engines that cannot express it in one statement leave the case out —
+	// their drivers then don't implement BatchColumnsReader and callers fall
+	// back to per-table reads.
+	CatalogBatchColumns
 )

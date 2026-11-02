@@ -184,6 +184,52 @@ func (d *PostgresDriver) ListColumns(ctx context.Context, schema, table string) 
 	return out, nil
 }
 
+// BatchColumns reads every table's and view's columns of one schema in one
+// round trip (BatchColumnsReader): the CatalogColumns recipe with the table
+// filter dropped and relname prepended, so the per-column mapping is the
+// ListColumns mapping shifted by one position.
+func (d *PostgresDriver) BatchColumns(ctx context.Context, schema string) ([]dbcore.ColumnInfo, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a := d.dialect.CatalogQuery(dbcore.CatalogBatchColumns, schema, "")
+	res, err := dbcore.RunQuery(ctx, d.db, q, a)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.ColumnInfo, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		ci := dbcore.ColumnInfo{
+			Table:        r[0].S,
+			Name:         r[1].S,
+			Type:         r[2].S,
+			Nullable:     r[3].S == "YES",
+			IsPrimaryKey: r[5].I != 0,
+			Comment:      r[6].S,
+			// r[7] = attnum (1-based), r[8] = 1/0 identity, generated or
+			// serial (nextval default) flag.
+			OrdinalPosition: int32(r[7].I),
+			IsAutoIncrement: r[8].I != 0,
+		}
+		if r[4].Kind != dbcore.ValNull {
+			s := r[4].S
+			ci.Default = &s
+		}
+		// Same serial/identity split as ListColumns: CreateTableSQL must not
+		// stack GENERATED ALWAYS AS IDENTITY on top of a serial column.
+		if ci.IsAutoIncrement {
+			if ci.Default != nil && strings.HasPrefix(*ci.Default, "nextval(") {
+				ci.IdentityKind = "serial"
+			} else {
+				ci.IdentityKind = "identity"
+			}
+		}
+		out = append(out, ci)
+	}
+	return out, nil
+}
+
 func (d *PostgresDriver) ListIndexes(ctx context.Context, schema, table string) ([]dbcore.IndexInfo, error) {
 	schema, err := d.resolveSchema(ctx, schema)
 	if err != nil {
@@ -502,6 +548,33 @@ func (l PostgresDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj strin
 				AND a.attnum > 0 AND NOT a.attisdropped
 			ORDER BY a.attnum`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}
+	case dbcore.CatalogBatchColumns:
+		// CatalogColumns with relname prepended and the table filter dropped:
+		// one round trip for the whole schema, same expressions and attnum
+		// ordering so the batch result equals the per-table one row for row.
+		return `SELECT c.relname,
+				a.attname,
+				format_type(a.atttypid, a.atttypmod),
+				CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END,
+				pg_get_expr(d.adbin, d.adrelid),
+				CASE WHEN EXISTS (
+					SELECT 1 FROM pg_constraint k
+					WHERE k.conrelid = a.attrelid AND k.contype = 'p' AND a.attnum = ANY(k.conkey)
+				) THEN 1 ELSE 0 END,
+				COALESCE(col_description(a.attrelid, a.attnum), ''),
+				a.attnum,
+				CASE WHEN COALESCE(a.attidentity <> '', false)
+					OR COALESCE(a.attgenerated <> '', false)
+					OR COALESCE(pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%', false)
+					THEN 1 ELSE 0 END
+			FROM pg_attribute a
+			INNER JOIN pg_class c ON c.oid = a.attrelid
+			INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+			LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+			WHERE n.nspname::text = $1
+				AND a.attnum > 0 AND NOT a.attisdropped
+			ORDER BY c.relname, a.attnum`,
+			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}}
 	case dbcore.CatalogIndexes:
 		// indkey pairs with indoption so a key part carries its DESC flag; an
 		// expression part has attnum 0, and pg_get_indexdef renders its text

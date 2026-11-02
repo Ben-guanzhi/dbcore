@@ -124,6 +124,62 @@ func (h Harness) Run(t *testing.T) {
 		}
 	})
 
+	t.Run("catalog_batch", func(t *testing.T) {
+		// BatchColumnsReader claims "batch result == per-table result" for
+		// every name ListTables returns. The equivalence is the capability's
+		// whole correctness argument, so it is pinned here rather than trusted:
+		// grouping, folding and value mapping must all agree row for row.
+		bc, ok := dbcore.AsBatchColumns(drv)
+		if !ok {
+			t.Skip("driver does not implement BatchColumnsReader")
+		}
+		tables, err := drv.ListTables(ctx, h.Schema)
+		if err != nil {
+			t.Fatalf("ListTables: %v", err)
+		}
+		batch, err := bc.BatchColumns(ctx, h.Schema)
+		if err != nil {
+			t.Fatalf("BatchColumns: %v", err)
+		}
+		byTable := make(map[string][]dbcore.ColumnInfo, len(tables))
+		for _, c := range batch {
+			byTable[c.Table] = append(byTable[c.Table], c)
+		}
+		want := make(map[string]bool, len(tables))
+		for _, tb := range tables {
+			want[tb.Name] = true
+			per, err := drv.ListColumns(ctx, h.Schema, tb.Name)
+			if err != nil {
+				t.Fatalf("ListColumns(%s): %v", tb.Name, err)
+			}
+			got := byTable[tb.Name]
+			if len(got) != len(per) {
+				t.Fatalf("table %s: batch has %d columns, per-table has %d", tb.Name, len(got), len(per))
+			}
+			for i := range per {
+				b, p := got[i], per[i]
+				if b.Name != p.Name || b.Type != p.Type || b.Nullable != p.Nullable ||
+					b.IsPrimaryKey != p.IsPrimaryKey || b.Comment != p.Comment ||
+					b.OrdinalPosition != p.OrdinalPosition || b.IsAutoIncrement != p.IsAutoIncrement ||
+					b.IdentityKind != p.IdentityKind {
+					t.Errorf("table %s column #%d: batch %+v != per-table %+v", tb.Name, i, b, p)
+				}
+				if b.Default == nil || p.Default == nil {
+					if (b.Default == nil) != (p.Default == nil) {
+						t.Errorf("table %s column %s: default nil mismatch (%v vs %v)", tb.Name, p.Name, b.Default, p.Default)
+					}
+				} else if *b.Default != *p.Default {
+					t.Errorf("table %s column %s: default %q != %q", tb.Name, p.Name, *b.Default, *p.Default)
+				}
+			}
+		}
+		for tbl := range byTable {
+			if !want[tbl] {
+				t.Errorf("batch returned columns for %q which ListTables does not list", tbl)
+			}
+		}
+	})
+
 	t.Run("parameterized_insert_no_inline_literal", func(t *testing.T) {
 		before, err := drv.BrowseRowsCount(ctx, h.Schema, name, &dbcore.TableRowsRequest{})
 		if err != nil {

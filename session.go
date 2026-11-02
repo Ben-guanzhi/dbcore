@@ -272,3 +272,23 @@ func AsExtraMetadata(d Driver) (ExtraMetadataReader, bool) {
 	x, ok := d.(ExtraMetadataReader)
 	return x, ok
 }
+
+// BatchColumnsReader reads every table's and view's columns of one schema in a
+// single round trip, keyed by ColumnInfo.Table. It is the batch form of
+// ListColumns: for every name ListTables returns, the grouped batch result
+// must equal the per-table result — drivertest's catalog_batch enforces the
+// equivalence (shape and values) on every engine that claims the capability.
+//
+// Callers that walk T tables (ER diagrams, compare snapshots, AI context
+// collection) otherwise issue T round trips for columns alone; this collapses
+// that phase to one. Engines that cannot express the query in one statement
+// simply do not implement it — AsBatchColumns reports false and callers fall
+// back to per-table reads, so coverage can grow engine by engine.
+type BatchColumnsReader interface {
+	BatchColumns(ctx context.Context, schema string) ([]ColumnInfo, error)
+}
+
+func AsBatchColumns(d Driver) (BatchColumnsReader, bool) {
+	b, ok := d.(BatchColumnsReader)
+	return b, ok
+}

@@ -175,6 +175,42 @@ func (d *MySQLDriver) ListColumns(ctx context.Context, schema, table string) ([]
 	return out, nil
 }
 
+// BatchColumns reads every table's and view's columns of one schema in one
+// round trip (BatchColumnsReader): the CatalogColumns recipe with the table
+// filter dropped and TABLE_NAME prepended, so the per-column mapping is the
+// ListColumns mapping shifted by one position.
+func (d *MySQLDriver) BatchColumns(ctx context.Context, schema string) ([]dbcore.ColumnInfo, error) {
+	schema, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a := d.dialect.CatalogQuery(dbcore.CatalogBatchColumns, schema, "")
+	res, err := dbcore.RunQuery(ctx, d.db, q, a)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.ColumnInfo, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		ci := dbcore.ColumnInfo{
+			Table:        r[0].S,
+			Name:         r[1].S,
+			Type:         r[2].S,
+			Nullable:     r[3].S == "YES",
+			IsPrimaryKey: r[5].S == "PRI",
+			Comment:      r[6].S,
+			// r[7] = ORDINAL_POSITION, r[8] = 1/0 auto_increment flag.
+			OrdinalPosition: int32(r[7].I),
+			IsAutoIncrement: r[8].I != 0,
+		}
+		if r[4].Kind != dbcore.ValNull {
+			s := r[4].S
+			ci.Default = &s
+		}
+		out = append(out, ci)
+	}
+	return out, nil
+}
+
 func (d *MySQLDriver) ListIndexes(ctx context.Context, schema, table string) ([]dbcore.IndexInfo, error) {
 	schema, err := d.resolveSchema(ctx, schema)
 	if err != nil {
@@ -438,6 +474,15 @@ func (l MySQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) 
 			FROM information_schema.COLUMNS
 			WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}, {Kind: dbcore.ValText, S: obj}}
+	case dbcore.CatalogBatchColumns:
+		// CatalogColumns with TABLE_NAME prepended and the table filter
+		// dropped: one round trip for the whole schema, same expressions so
+		// the batch result equals the per-table one row for row.
+		return `SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, COLUMN_COMMENT,
+				ORDINAL_POSITION, COALESCE(EXTRA, '') LIKE '%auto_increment%'
+			FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION`,
+			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}}
 	case dbcore.CatalogIndexes:
 		// EXPRESSION (8.0.13+) names a functional key part; the driver falls
 		// back to mysqlIndexesWithoutExpressions on MariaDB, which lacks the
