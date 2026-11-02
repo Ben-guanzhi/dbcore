@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# The kernel resolves no external module via `replace` (it IS the replace
+# target), so unlike the four consumer repos this workflow needs no sibling
+# checkout: a plain single-repo clone builds standalone.
+#
+# Live-database contract tests are env-gated (DBCORE_TEST_PG_DSN / MYSQL /
+# MSSQL / ORACLE) and skip when unset; the Redis KV contract runs on miniredis.
+# This job is therefore the OFFLINE suite: 14 packages, no services needed.
+# The consumer-side regression rule (any kernel change re-run against
+# TableProGo / fynequery / sqltui / polydb) stays a local discipline — see
+# WORKSPACE.md at the workspace root.
+
+jobs:
+  go:
+    name: Go (fmt / vet / build / test / race)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pinned rather than read from go.mod: that file declares only a language
+      # floor (`go 1.25.0`), while the tree is formatted with Go 1.27.1 — the
+      # two gofmt builds disagree on some composite-literal alignment, so a
+      # file `gofmt -w` fixes locally can still fail this job's gofmt step.
+      # Same rationale as sqltui-main's ci.yml (see PUBLISH-BLOCKER §4.3).
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed for: $unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        # Surfaces the failing tests as an annotation so the failure is readable
+        # without being able to open the raw job logs.
+        run: |
+          set +e
+          out=$(go test -count=1 ./... 2>&1)
+          rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            detail=$(printf '%s' "$out" | grep -E '^(--- FAIL|FAIL|    )' | head -40 | tr '\n' ' ' | head -c 1500)
+            echo "::error title=go test rc=$rc::[$detail]"
+          fi
+          exit "$rc"
+
+      - name: test -race
+        # Wave 25 made -race part of the regression discipline (it had never run
+        # before wave 14's race was found by reading code, not by tooling); keep
+        # the kernel honest on every push. Only the offline suite: same skips as
+        # the `test` step above.
+        run: |
+          set +e
+          out=$(go test -race -count=1 ./... 2>&1)
+          rc=$?
+          echo "$out"
+          if [ "$rc" -ne 0 ]; then
+            detail=$(printf '%s' "$out" | grep -E '^(--- FAIL|FAIL|WARNING: DATA RACE|    )' | head -40 | tr '\n' ' ' | head -c 1500)
+            echo "::error title=go test -race rc=$rc::[$detail]"
+          fi
+          exit "$rc"
