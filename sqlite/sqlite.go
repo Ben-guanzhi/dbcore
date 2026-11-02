@@ -265,6 +265,49 @@ func (d *SQLiteDriver) ListForeignKeys(ctx context.Context, schema, table string
 	return out, nil
 }
 
+// BatchForeignKeys reads every table's foreign keys in one round trip
+// (BatchForeignKeysReader). Row shape = CatalogForeignKeys with the table
+// name prepended; the per-(table, id) grouping mirrors ListForeignKeys, and
+// the synthetic name namespaces the id per table so the two paths agree.
+func (d *SQLiteDriver) BatchForeignKeys(ctx context.Context, schema string) ([]dbcore.TableForeignKeys, error) {
+	q, _ := d.dialect.CatalogQuery(dbcore.CatalogBatchForeignKeys, schema, "")
+	res, err := dbcore.RunQuery(ctx, d.db, q, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Rows arrive ordered by (table, id, seq): one row per column pair under
+	// a shared (table, id) pair. A map would need a second sort to restore
+	// the row order; an append-only walk of the ordering keeps both stable.
+	var out []dbcore.TableForeignKeys
+	index := make(map[[2]any]int, len(res.Rows))
+	for _, r := range res.Rows {
+		table := r[0].S
+		key := [2]any{table, r[1].I}
+		i, ok := index[key]
+		if !ok {
+			// New table → new group; new (table, id) → new FK in that group.
+			if len(out) == 0 || out[len(out)-1].Table != table {
+				out = append(out, dbcore.TableForeignKeys{Table: table})
+			}
+			cur := &out[len(out)-1]
+			cur.ForeignKeys = append(cur.ForeignKeys, dbcore.ForeignKeyInfo{
+				Name:       fmt.Sprintf("fk_%s_%d", table, r[1].I),
+				Columns:    []string{r[3].S},
+				RefTable:   r[2].S,
+				RefColumns: []string{r[4].S},
+				OnUpdate:   dbcore.NormalizeFKAction(r[5].S),
+				OnDelete:   dbcore.NormalizeFKAction(r[6].S),
+			})
+			index[key] = len(cur.ForeignKeys) - 1
+			continue
+		}
+		cur := &out[len(out)-1]
+		cur.ForeignKeys[i].Columns = append(cur.ForeignKeys[i].Columns, r[3].S)
+		cur.ForeignKeys[i].RefColumns = append(cur.ForeignKeys[i].RefColumns, r[4].S)
+	}
+	return out, nil
+}
+
 func (d *SQLiteDriver) CreateTableSQL(ctx context.Context, schema, table string) (string, error) {
 	q := fmt.Sprintf("SELECT sql FROM sqlite_master WHERE type='table' AND name=%s", d.dialect.Placeholder(1))
 	res, err := dbcore.RunQuery(ctx, d.db, q, []dbcore.Value{{Kind: dbcore.ValText, S: table}})
@@ -422,6 +465,17 @@ func (l SQLiteDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string)
 	case dbcore.CatalogForeignKeys:
 		return `SELECT id, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?) ORDER BY id, seq`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: obj}}
+	case dbcore.CatalogBatchForeignKeys:
+		// CatalogForeignKeys with the table name prepended, one round trip for
+		// the whole schema. Only base tables: views cannot carry foreign keys,
+		// and pragma_foreign_key_list on a view would error the join. The
+		// grouping key is (t.name, fkl.id) — the synthetic fk_<table>_<id>
+		// name keeps the two paths' names 1:1.
+		return `SELECT t.name, fkl.id, fkl."table", fkl."from", fkl."to", fkl.on_update, fkl.on_delete
+			FROM sqlite_master t
+			JOIN pragma_foreign_key_list(t.name) fkl ON true
+			WHERE t.type = 'table' AND t.name NOT LIKE 'sqlite_%'
+			ORDER BY t.name, fkl.id, fkl.seq`, nil
 	default:
 		return `SELECT name FROM pragma_database_list()`, nil
 	}

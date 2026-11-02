@@ -127,21 +127,69 @@ func Collect(ctx context.Context, drv dbcore.SQLDriver, schema string) (*Snapsho
 	sort.Slice(tables, func(i, j int) bool { return tables[i].Name < tables[j].Name })
 
 	snap := &Snapshot{Kind: string(drv.Kind()), Schema: schema, Tables: make([]Table, 0, len(tables))}
+	// Columns in one round trip when the driver offers the batch capability
+	// (K-1): a snapshot over T tables otherwise costs one ListColumns per
+	// table. The batch path must not weaken the error contract below — a
+	// failed or partial batch falls back to per-table reads, where errors
+	// propagate and abort the snapshot rather than degrading it.
+	batchCols := map[string][]dbcore.ColumnInfo{}
+	batchKnown := false
+	if bc, ok := dbcore.AsBatchColumns(drv); ok {
+		all, err := bc.BatchColumns(ctx, schema)
+		if err != nil {
+			// Degrade to the per-table loop; its own errors propagate.
+			batchCols, batchKnown = nil, false
+		} else {
+			for _, c := range all {
+				batchCols[c.Table] = append(batchCols[c.Table], c)
+			}
+			batchKnown = true
+		}
+	}
+	// Foreign keys batch the same way (K-1.2). Unlike columns, an empty group
+	// is meaningful here — a table with no foreign keys — so group presence is
+	// tracked separately, and only a failed batch falls back to per-table.
+	batchFK := map[string][]dbcore.ForeignKeyInfo{}
+	batchFKKnown := false
+	if bf, ok := dbcore.AsBatchForeignKeys(drv); ok {
+		all, err := bf.BatchForeignKeys(ctx, schema)
+		if err == nil {
+			for _, grp := range all {
+				batchFK[grp.Table] = grp.ForeignKeys
+			}
+			batchFKKnown = true
+		}
+	}
 	for _, found := range tables {
 		if found.Type == "view" || found.Type == "materialized_view" {
 			continue
 		}
-		columns, err := drv.ListColumns(ctx, schema, found.Name)
-		if err != nil {
-			return nil, fmt.Errorf("schemadiff: list columns of %s: %w", found.Name, err)
+		columns, ok := batchCols[found.Name]
+		if !batchKnown || !ok || len(columns) == 0 {
+			// Per-table path: also the backstop for a table the batch missed
+			// (contract says it cannot happen; a real table always has
+			// columns). Its error propagates — never a half-read snapshot.
+			var err error
+			columns, err = drv.ListColumns(ctx, schema, found.Name)
+			if err != nil {
+				return nil, fmt.Errorf("schemadiff: list columns of %s: %w", found.Name, err)
+			}
 		}
 		indexes, err := drv.ListIndexes(ctx, schema, found.Name)
 		if err != nil {
 			return nil, fmt.Errorf("schemadiff: list indexes of %s: %w", found.Name, err)
 		}
-		foreignKeys, err := drv.ListForeignKeys(ctx, schema, found.Name)
-		if err != nil {
-			return nil, fmt.Errorf("schemadiff: list foreign keys of %s: %w", found.Name, err)
+		var foreignKeys []dbcore.ForeignKeyInfo
+		if batchFKKnown {
+			// Batch path: the per-table group; absent = no foreign keys, a
+			// real state, not a batch miss.
+			foreignKeys = batchFK[found.Name]
+		} else {
+			var err error
+			foreignKeys, err = drv.ListForeignKeys(ctx, schema, found.Name)
+			if err != nil {
+				return nil, fmt.Errorf("schemadiff: list foreign keys of %s: %w", found.Name, err)
+			}
 		}
 		sort.Slice(indexes, func(i, j int) bool { return indexes[i].Name < indexes[j].Name })
 		sort.Slice(foreignKeys, func(i, j int) bool { return foreignKeys[i].Name < foreignKeys[j].Name })

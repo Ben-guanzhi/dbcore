@@ -50,4 +50,10 @@ const (
 	// their drivers then don't implement BatchColumnsReader and callers fall
 	// back to per-table reads.
 	CatalogBatchColumns
+	// CatalogBatchForeignKeys is the schema-wide form of CatalogForeignKeys:
+	// one round trip for every table's foreign keys, row shape identical with
+	// the table name PREPENDED. The synthetic constraint name must be
+	// namespaced per table (fk_<table>_<id>) so the batch grouping key
+	// <table, id> maps 1:1 onto the per-table path's names.
+	CatalogBatchForeignKeys
 )

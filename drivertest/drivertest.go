@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,6 +177,59 @@ func (h Harness) Run(t *testing.T) {
 		for tbl := range byTable {
 			if !want[tbl] {
 				t.Errorf("batch returned columns for %q which ListTables does not list", tbl)
+			}
+		}
+	})
+
+	t.Run("catalog_batch_fk", func(t *testing.T) {
+		// BatchForeignKeysReader claims the same equivalence as catalog_batch:
+		// per-table grouping, same column order, same synthetic names. A
+		// mismatch here would silently rewire ER-diagram arrows (the FK
+		// columns land on the wrong parents), so it is pinned, not trusted.
+		bf, ok := dbcore.AsBatchForeignKeys(drv)
+		if !ok {
+			t.Skip("driver does not implement BatchForeignKeysReader")
+		}
+		batch, err := bf.BatchForeignKeys(ctx, h.Schema)
+		if err != nil {
+			t.Fatalf("BatchForeignKeys: %v", err)
+		}
+		byTable := make(map[string][]dbcore.ForeignKeyInfo)
+		for _, grp := range batch {
+			if len(grp.ForeignKeys) == 0 {
+				t.Errorf("table %q: batch returned an empty group", grp.Table)
+				continue
+			}
+			byTable[grp.Table] = grp.ForeignKeys
+		}
+		tables, err := drv.ListTables(ctx, h.Schema)
+		if err != nil {
+			t.Fatalf("ListTables: %v", err)
+		}
+		want := make(map[string]bool, len(tables))
+		for _, tb := range tables {
+			want[tb.Name] = true
+			per, err := drv.ListForeignKeys(ctx, h.Schema, tb.Name)
+			if err != nil {
+				t.Fatalf("ListForeignKeys(%s): %v", tb.Name, err)
+			}
+			got := byTable[tb.Name]
+			if len(got) != len(per) {
+				t.Fatalf("table %s: batch has %d fks, per-table has %d", tb.Name, len(got), len(per))
+			}
+			for i := range per {
+				b, p := got[i], per[i]
+				if b.Name != p.Name || strings.Join(b.Columns, ",") != strings.Join(p.Columns, ",") ||
+					b.RefTable != p.RefTable ||
+					strings.Join(b.RefColumns, ",") != strings.Join(p.RefColumns, ",") ||
+					b.OnUpdate != p.OnUpdate || b.OnDelete != p.OnDelete {
+					t.Errorf("table %s fk #%d: batch %+v != per-table %+v", tb.Name, i, b, p)
+				}
+			}
+		}
+		for tbl := range byTable {
+			if !want[tbl] {
+				t.Errorf("batch returned fks for %q which ListTables does not list", tbl)
 			}
 		}
 	})

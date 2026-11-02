@@ -292,3 +292,28 @@ func AsBatchColumns(d Driver) (BatchColumnsReader, bool) {
 	b, ok := d.(BatchColumnsReader)
 	return b, ok
 }
+
+// TableForeignKeys is one table's slice of the batch FK result: the batch
+// query prepends the table name, so the batch carries the grouping explicitly
+// instead of overloading ForeignKeyInfo with a Table field (that struct is a
+// per-table shape; adding a batch-only field would leak the grouping into it).
+type TableForeignKeys struct {
+	Table       string
+	ForeignKeys []ForeignKeyInfo
+}
+
+// BatchForeignKeysReader is the batch form of ListForeignKeys: every table's
+// foreign keys of one schema in a single round trip, grouped per table.
+// Equivalence with the per-table path is enforced by drivertest's
+// catalog_batch_fk: same grouping, same synthetic names (fk_<table>_<id> for
+// engines without constraint names), same column order and actions. Engines
+// that cannot express the join simply do not implement it —
+// AsBatchForeignKeys reports false and callers fall back to per-table reads.
+type BatchForeignKeysReader interface {
+	BatchForeignKeys(ctx context.Context, schema string) ([]TableForeignKeys, error)
+}
+
+func AsBatchForeignKeys(d Driver) (BatchForeignKeysReader, bool) {
+	b, ok := d.(BatchForeignKeysReader)
+	return b, ok
+}
