@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/mysql"
 	"github.com/dbcore/dbcore/mssql"
+	"github.com/dbcore/dbcore/mysql"
 	"github.com/dbcore/dbcore/oracle"
 	"github.com/dbcore/dbcore/postgres"
 	"github.com/dbcore/dbcore/sqlite"
