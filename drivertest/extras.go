@@ -48,6 +48,14 @@ func (h Harness) runCatalogDetailContract(t *testing.T, ctx context.Context, drv
 	}()
 
 	t.Run("catalog_indexes", func(t *testing.T) {
+		// The sync layer's boundary: expression key parts, DESC flags and the
+		// partial-index predicate are read here (and asserted where an engine
+		// reports them) so the structure page can show a faithful index, but
+		// dbcore/schemadiff deliberately does not compare or rebuild them — the
+		// DDL renderer carries only the plain column list. An index carrying
+		// them is left out of the plan and reported as a warning instead of being
+		// silently recreated without them. Keep this boundary in sync with
+		// schemadiff.faithfulIndex if it changes.
 		indexes, err := drv.ListIndexes(ctx, h.Schema, child)
 		if err != nil {
 			t.Fatalf("ListIndexes: %v", err)

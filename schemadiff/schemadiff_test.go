@@ -152,6 +152,79 @@ func TestDiffRebuildsAnIndexThatChangedShape(t *testing.T) {
 	}
 }
 
+// An index carrying a partial-index predicate, an expression key part or a DESC
+// flag is collected and displayed, but the DDL renderer joins the plain column
+// list only: planning a rebuild would write a *different* index (the predicate
+// gone, the expression quoted as an identifier, the sort order flattened). The
+// comparison therefore leaves such an index out of the plan and the script names
+// it, instead of silently recreating it wrong.
+func TestDiffLeavesOutIndexesTheRendererCannotCarry(t *testing.T) {
+	pred := index("i_pred", false, false, "a")
+	pred.Predicate = "a > 0"
+	expr := index("i_expr", false, false, "a")
+	expr.Parts = []dbcore.IndexPart{{Expression: "lower(a)"}}
+	desc := index("i_desc", false, false, "a")
+	desc.Parts = []dbcore.IndexPart{{Column: "a", Desc: true}}
+
+	source := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("a", "text", true, "")},
+		Indexes: []dbcore.IndexInfo{pred, expr, desc},
+	}}}
+	target := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("a", "text", true, "")},
+	}}}
+
+	entries := Diff(source, target, Options{})
+	for _, e := range entries {
+		if e.Op == OpCreateIndex || e.Op == OpDropIndex {
+			t.Errorf("an index the renderer cannot carry must not be planned: %+v", e)
+		}
+	}
+	result := Script(source, target, entries)
+	if len(result.Statements) != 0 {
+		t.Errorf("statements = %+v, want none", result.Statements)
+	}
+	if len(result.Warnings) != 3 {
+		t.Fatalf("warnings = %+v, want one per left-out index", result.Warnings)
+	}
+	for _, warn := range result.Warnings {
+		if !strings.Contains(warn, "同步不重建该索引") {
+			t.Errorf("warning does not name the boundary: %q", warn)
+		}
+	}
+}
+
+// The boundary is per index, not global: a plain index still plans and renders
+// while an expression or partial one beside it is only named.
+func TestDiffStillPlansTheIndexesItCanRender(t *testing.T) {
+	plain := index("i_plain", false, false, "a")
+	pred := index("i_pred", false, false, "a")
+	pred.Predicate = "a > 0"
+	source := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("a", "text", true, "")},
+		Indexes: []dbcore.IndexInfo{plain, pred},
+	}}}
+	target := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("a", "text", true, "")},
+	}}}
+
+	entries := Diff(source, target, Options{})
+	if len(entries) != 1 || entries[0].Op != OpCreateIndex || entries[0].Object != "i_plain" {
+		t.Fatalf("entries = %+v, want one create for i_plain", entries)
+	}
+	result := Script(source, target, entries)
+	if len(result.Statements) != 1 || !strings.Contains(result.Statements[0].SQL, "CREATE INDEX") {
+		t.Fatalf("statements = %+v, want the plain index", result.Statements)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "i_pred") {
+		t.Fatalf("warnings = %+v, want the left-out index named", result.Warnings)
+	}
+}
+
 func TestScriptRendersTheSameChangePerEngine(t *testing.T) {
 	source := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{{
 		Name:    "t",
@@ -311,6 +384,111 @@ func TestCollectAndDiffOnRealSQLite(t *testing.T) {
 	}
 	if remaining := Diff(snapshotSource, after, Options{IgnoreForeignKeys: true}); len(remaining) != 0 {
 		t.Fatalf("sync did not converge, remaining: %+v", remaining)
+	}
+}
+
+// TestCollectAndDiffLeavesPartialIndexAlone pins the boundary against a real
+// engine: SQLite reports an expression key part and a WHERE predicate through
+// ListIndexes, but the statement renderer cannot carry them, so a sync must leave
+// the index alone and say so rather than rebuild it without them. The second
+// comparison must be empty — the boundary is not a source of drift.
+func TestCollectAndDiffLeavesPartialIndexAlone(t *testing.T) {
+	dir := t.TempDir()
+	open := func(name string) *sqlite.SQLiteDriver {
+		drv, err := sqlite.Open(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("open %s: %v", name, err)
+		}
+		t.Cleanup(func() { _ = drv.Close() })
+		return drv
+	}
+	exec := func(drv *sqlite.SQLiteDriver, statements ...string) {
+		for _, s := range statements {
+			if _, err := drv.Execute(context.Background(), s); err != nil {
+				t.Fatalf("exec %q: %v", s, err)
+			}
+		}
+	}
+
+	source := open("partial_source.db")
+	exec(source,
+		`CREATE TABLE book (id integer primary key, title text)`,
+		`CREATE INDEX idx_plain ON book (title)`,
+		`CREATE INDEX idx_partial ON book (lower(title) DESC) WHERE title <> ''`,
+	)
+	target := open("partial_target.db")
+
+	ctx := context.Background()
+	snapshotSource, err := Collect(ctx, source, "main")
+	if err != nil {
+		t.Fatalf("collect source: %v", err)
+	}
+	snapshotTarget, err := Collect(ctx, target, "main")
+	if err != nil {
+		t.Fatalf("collect target: %v", err)
+	}
+
+	// The partial index is collected with both its expression part and its
+	// predicate — the data the boundary is about is really there.
+	partial := indexNamed(tableNamed(snapshotSource, "book"), "idx_partial")
+	if partial == nil {
+		t.Fatal("idx_partial was not collected")
+	}
+	if partial.Predicate == "" || len(partial.Parts) == 0 || partial.Parts[0].Expression == "" {
+		t.Fatalf("idx_partial = %+v, want an expression part and a predicate", partial)
+	}
+
+	entries := Diff(snapshotSource, snapshotTarget, Options{})
+	var created []string
+	for _, e := range entries {
+		if e.Op == OpCreateIndex {
+			created = append(created, e.Object)
+		}
+	}
+	if len(created) != 1 || created[0] != "idx_plain" {
+		t.Fatalf("created = %v, want only idx_plain", created)
+	}
+
+	result := Script(snapshotSource, snapshotTarget, entries)
+	var indexStatements []string
+	for _, st := range result.Statements {
+		if strings.Contains(st.SQL, "CREATE INDEX") {
+			indexStatements = append(indexStatements, st.SQL)
+		}
+	}
+	if len(indexStatements) != 1 || !strings.Contains(indexStatements[0], "idx_plain") {
+		t.Fatalf("index statements = %+v, want the plain index only", result.Statements)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("the left-out partial index must be reported, not swallowed")
+	}
+	var named bool
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "idx_partial") {
+			named = true
+		}
+	}
+	if !named {
+		t.Errorf("warnings = %+v, want idx_partial named", result.Warnings)
+	}
+
+	for _, st := range result.Statements {
+		if _, err := target.Execute(ctx, st.SQL); err != nil {
+			t.Fatalf("apply %q: %v", st.SQL, err)
+		}
+	}
+
+	after, err := Collect(ctx, target, "main")
+	if err != nil {
+		t.Fatalf("re-collect: %v", err)
+	}
+	remaining := Diff(snapshotSource, after, Options{})
+	if len(remaining) != 0 {
+		t.Fatalf("a second comparison must be empty: %+v", remaining)
+	}
+	// And the sync did not invent the partial index behind the boundary.
+	if got := indexNamed(tableNamed(after, "book"), "idx_partial"); got != nil {
+		t.Errorf("idx_partial was rebuilt without its predicate: %+v", got)
 	}
 }
 

@@ -20,6 +20,12 @@
 //   - Column order, comments, identity/auto-increment flags and check
 //     constraints are not compared. They would need engine-specific DDL that
 //     dbcore/ddl deliberately does not invent.
+//   - An index's expression key parts, DESC flags, access method and
+//     partial-index predicate are collected for display but deliberately not
+//     compared. The statement renderer carries only the plain column list, so
+//     a plan that tried to rebuild such an index would either report a
+//     difference it cannot fix or silently create a *different* index. Such an
+//     index is left out of the plan and reported as a warning instead.
 package schemadiff
 
 import (
@@ -383,25 +389,32 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 
 // diffIndexes compares secondary indexes only; a primary key is a table
 // constraint and is handled above.
+//
+// Only the plain column list is compared. An index whose definition carries
+// something the statement renderer would drop — an expression key part, a DESC
+// flag, a partial-index predicate — is left out of the plan entirely: reporting
+// it would ask for a rebuild the renderer cannot carry out, and building it
+// anyway would write a different index. Script names those indexes as warnings
+// so the gap is visible rather than silent.
 func diffIndexes(source, target Table) []Entry {
 	var entries []Entry
 	sourceIdx := map[string]dbcore.IndexInfo{}
 	for _, i := range source.Indexes {
-		if i.Primary {
+		if i.Primary || !faithfulIndex(i) {
 			continue
 		}
 		sourceIdx[fold(i.Name)] = i
 	}
 	targetIdx := map[string]dbcore.IndexInfo{}
 	for _, i := range target.Indexes {
-		if i.Primary {
+		if i.Primary || !faithfulIndex(i) {
 			continue
 		}
 		targetIdx[fold(i.Name)] = i
 	}
 
 	for _, i := range source.Indexes {
-		if i.Primary {
+		if i.Primary || !faithfulIndex(i) {
 			continue
 		}
 		other, ok := targetIdx[fold(i.Name)]
@@ -442,7 +455,7 @@ func diffIndexes(source, target Table) []Entry {
 		}
 	}
 	for _, i := range target.Indexes {
-		if i.Primary {
+		if i.Primary || !faithfulIndex(i) {
 			continue
 		}
 		if _, ok := sourceIdx[fold(i.Name)]; ok {
@@ -602,6 +615,45 @@ func indexSpec(i dbcore.IndexInfo) string {
 		return "UNIQUE (" + strings.Join(i.Columns, ", ") + ")"
 	}
 	return "(" + strings.Join(i.Columns, ", ") + ")"
+}
+
+// faithfulIndex reports whether ddl.Index carries every part of this index
+// definition. The renderer joins Columns with plain quoting, so it drops three
+// things: expression key parts (IndexPart.Expression), DESC flags
+// (IndexPart.Desc) and a partial-index predicate (IndexInfo.Predicate). An index
+// with any of them would be rebuilt into a *different* index, so the comparison
+// leaves it out of the plan and Script reports it instead.
+func faithfulIndex(i dbcore.IndexInfo) bool {
+	if i.Predicate != "" {
+		return false
+	}
+	for _, p := range i.Parts {
+		if p.Expression != "" || p.Desc {
+			return false
+		}
+	}
+	return true
+}
+
+// unfaithfulIndexWarnings names every secondary index the plan deliberately
+// leaves alone, on both sides, so a user staring at an empty plan knows why the
+// sync did not touch an index that is visibly there. The message says what the
+// index carries rather than just "skipped".
+func unfaithfulIndexWarnings(snap *Snapshot) []string {
+	if snap == nil {
+		return nil
+	}
+	var out []string
+	for _, t := range snap.Tables {
+		for _, i := range t.Indexes {
+			if i.Primary || faithfulIndex(i) {
+				continue
+			}
+			out = append(out, fmt.Sprintf("%s.%s 含表达式键/DESC/部分索引谓词，同步不重建该索引",
+				t.Name, i.Name))
+		}
+	}
+	return out
 }
 
 func fkSpec(fk dbcore.ForeignKeyInfo) string {

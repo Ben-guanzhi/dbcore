@@ -145,6 +145,13 @@ func Script(source, target *Snapshot, entries []Entry) ScriptResult {
 			warn("未识别的变更类型 %s", entry.Op)
 		}
 	}
+	// Name the indexes the comparison deliberately left out, on both sides, so an
+	// empty plan is not read as "nothing to do" while an expression or partial
+	// index sits visibly in the schema. The warning is deduplicated by the same
+	// mechanism as the entry warnings.
+	for _, text := range append(unfaithfulIndexWarnings(source), unfaithfulIndexWarnings(target)...) {
+		warn("%s", text)
+	}
 	return result
 }
 
