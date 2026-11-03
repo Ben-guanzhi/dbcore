@@ -116,6 +116,66 @@ func TestDiffSeesAColumnChangeAndOffersBothSides(t *testing.T) {
 	}
 }
 
+// TestScriptRendersADefaultOnlyChange pins the engines whose defaults are plain
+// column attributes: a default-only difference must come out as a statement, so
+// the plan is empty afterwards rather than naming an entry that runs nothing.
+func TestScriptRendersADefaultOnlyChange(t *testing.T) {
+	from := column("status", "varchar(10)", true, "'A'")
+	to := column("status", "varchar(10)", true, "'B'")
+	for _, engine := range []string{sqltext.Postgres, sqltext.MySQL, sqltext.Oracle} {
+		source := &Snapshot{Kind: engine, Schema: "app", Tables: []Table{{
+			Name: "t", Columns: []dbcore.ColumnInfo{to},
+		}}}
+		target := &Snapshot{Kind: engine, Schema: "app", Tables: []Table{{
+			Name: "t", Columns: []dbcore.ColumnInfo{from},
+		}}}
+		entries := Diff(source, target, Options{})
+		if len(entries) != 1 || entries[0].Op != OpAlterColumn {
+			t.Fatalf("%s entries = %+v, want the default-only alter", engine, entries)
+		}
+		result := Script(source, target, entries)
+		if len(result.Statements) != 1 {
+			t.Fatalf("%s statements = %+v, want one", engine, result.Statements)
+		}
+		if !strings.Contains(result.Statements[0].SQL, "DEFAULT") {
+			t.Errorf("%s statement = %q, want it to carry the default", engine, result.Statements[0].SQL)
+		}
+		if len(result.Warnings) != 0 {
+			t.Errorf("%s warnings = %+v, want none", engine, result.Warnings)
+		}
+	}
+}
+
+// TestScriptReportsAnUnexpressableDefaultChange pins the consumer side of
+// CanAlterColumnDefault: on SQL Server a default is a named constraint the
+// renderer will not invent, so a default-only change produces no statement — but
+// the plan must say so rather than hand the user an entry that runs nothing.
+func TestScriptReportsAnUnexpressableDefaultChange(t *testing.T) {
+	from := column("status", "varchar(10)", true, "'A'")
+	to := column("status", "varchar(10)", true, "'B'")
+	source := &Snapshot{Kind: sqltext.SQLServer, Schema: "dbo", Tables: []Table{{
+		Name: "t", Columns: []dbcore.ColumnInfo{to},
+	}}}
+	target := &Snapshot{Kind: sqltext.SQLServer, Schema: "dbo", Tables: []Table{{
+		Name: "t", Columns: []dbcore.ColumnInfo{from},
+	}}}
+
+	entries := Diff(source, target, Options{})
+	if len(entries) != 1 || entries[0].Op != OpAlterColumn {
+		t.Fatalf("entries = %+v, want the default-only alter", entries)
+	}
+	result := Script(source, target, entries)
+	if len(result.Statements) != 0 {
+		t.Fatalf("statements = %+v, want none for SQL Server's named-constraint default", result.Statements)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings = %+v, want one naming the skipped default", result.Warnings)
+	}
+	if !strings.Contains(result.Warnings[0], "默认值") {
+		t.Errorf("warning = %q, want it to name the skipped default", result.Warnings[0])
+	}
+}
+
 func TestDiffMatchesNamesCaseInsensitively(t *testing.T) {
 	// Oracle folds identifiers to upper case; a comparison that treated case as
 	// significant would report every column as both added and dropped.

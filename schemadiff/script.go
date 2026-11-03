@@ -88,7 +88,14 @@ func Script(source, target *Snapshot, entries []Entry) ScriptResult {
 				warn("找不到列 %s.%s 的一侧定义，跳过修改", entry.Table, entry.Object)
 				continue
 			}
-			for _, sql := range ddl.AlterColumn(kind, schema, entry.Table, ddlColumn(*from), ddlColumn(*to)) {
+			statements, gap := ddl.AlterColumn(kind, schema, entry.Table, ddlColumn(*from), ddlColumn(*to))
+			// The renderer returns the parts it can express and names the part it
+			// left out (SQL Server stores a default as a named constraint). Both
+			// are surfaced: a partial change must never read as a complete one.
+			if gap != "" {
+				warn("%s", gap)
+			}
+			for _, sql := range statements {
 				result.Statements = append(result.Statements, Statement{entry.ID, sql})
 			}
 

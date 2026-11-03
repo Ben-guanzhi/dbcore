@@ -1,6 +1,7 @@
 package ddl
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/dbcore/dbcore/sqltext"
@@ -55,7 +56,9 @@ func CanAlterColumn(dbType string) bool {
 // CanAlterColumnDefault reports whether the engine can change an existing
 // column's default in place. SQL Server stores a default as a named constraint,
 // so replacing one means knowing (or dropping) that constraint's name — out of
-// reach of a text-only renderer, and reporting it beats inventing a name.
+// reach of a text-only renderer, and reporting it beats inventing a name. When
+// this is false and a default is part of the change, AlterColumn returns the
+// statements it can still produce plus a reason naming the default it left out.
 func CanAlterColumnDefault(dbType string) bool {
 	switch sqltext.Normalize(dbType) {
 	case sqltext.SQLite, sqltext.SQLServer:
@@ -70,21 +73,38 @@ func CanAlterColumnDefault(dbType string) bool {
 // nullability into one clause, MySQL folds type, nullability and default into
 // one MODIFY, and PostgreSQL needs a separate ALTER COLUMN action per aspect.
 //
-// It returns no statements when CanAlterColumn is false or when the two columns
-// are already equivalent — the caller decides what to say about that.
-func AlterColumn(dbType, schema, table string, from, to Column) []string {
+// The second result is a non-empty reason when the engine cannot express part
+// of the change. The renderer then returns the statements it *can* produce — so
+// a usable type change is not thrown away — and names the part it left behind,
+// instead of emitting a plausible-looking statement that would silently drop
+// it. A blank reason means the statements are the whole change and nothing was
+// skipped. When CanAlterColumn is false no statement can be produced at all.
+func AlterColumn(dbType, schema, table string, from, to Column) ([]string, string) {
 	if !CanAlterColumn(dbType) {
-		return nil
+		return nil, fmt.Sprintf("%s 不支持原地修改列（需重建整个表）", sqltext.Normalize(dbType))
 	}
 	object := tableName(dbType, schema, table)
 	column := ident(dbType, to.Name)
 
 	typeChanged := normSpace(from.Type) != normSpace(to.Type)
 	nullChanged := from.Nullable != to.Nullable
-	defaultChanged := CanAlterColumnDefault(dbType) && defaultOf(from) != defaultOf(to)
+	// defaultDiffers is the raw difference; defaultChanged folds in whether the
+	// engine can carry a default at all, so the two must not be collapsed into
+	// one variable.
+	defaultDiffers := defaultOf(from) != defaultOf(to)
+	defaultChanged := CanAlterColumnDefault(dbType) && defaultDiffers
 
+	var gap string
+	if defaultDiffers && !CanAlterColumnDefault(dbType) {
+		gap = fmt.Sprintf("%s 把默认值存为命名约束，无法原地替换，列 %s 的默认值改动未生成语句（需手工处理）",
+			sqltext.Normalize(dbType), to.Name)
+	}
+
+	// A default difference the engine cannot carry is a gap whether or not any
+	// other aspect changed, so it is computed before the "nothing to do" return:
+	// an empty statement list still has to say why it is empty.
 	if !typeChanged && !nullChanged && !defaultChanged {
-		return nil
+		return nil, gap
 	}
 
 	switch sqltext.Normalize(dbType) {
@@ -107,15 +127,12 @@ func AlterColumn(dbType, schema, table string, from, to Column) []string {
 				out = append(out, "ALTER TABLE "+object+" ALTER COLUMN "+column+" SET NOT NULL;")
 			}
 		}
-		return out
+		return out, gap
 
 	case sqltext.MySQL:
-		if !typeChanged && !nullChanged && !defaultChanged {
-			return nil
-		}
 		// MODIFY restates the whole column, so an unchanged aspect still has to
 		// be written out — leaving it off would silently reset it.
-		return []string{"ALTER TABLE " + object + " MODIFY COLUMN " + columnDef(dbType, to) + ";"}
+		return []string{"ALTER TABLE " + object + " MODIFY COLUMN " + columnDef(dbType, to) + ";"}, gap
 
 	default: // SQL Server and Oracle
 		var out []string
@@ -149,14 +166,14 @@ func AlterColumn(dbType, schema, table string, from, to Column) []string {
 			// this branch used to fall through and return EMPTY — a silent
 			// no-op on an engine that modifies defaults in place. SQL Server
 			// stores a default as a named constraint and is excluded by
-			// CanAlterColumnDefault — the consumer reports, not invents.
+			// CanAlterColumnDefault; its gap names the skipped default.
 			if value := strings.TrimSpace(to.DefaultValue); value == "" {
 				out = append(out, "ALTER TABLE "+object+" MODIFY ("+column+" DEFAULT NULL);")
 			} else {
 				out = append(out, "ALTER TABLE "+object+" MODIFY ("+column+" DEFAULT "+NormalizeDefault(dbType, value)+");")
 			}
 		}
-		return out
+		return out, gap
 	}
 }
 

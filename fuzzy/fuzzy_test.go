@@ -140,18 +140,20 @@ func TestMatchFoldSubsequence(t *testing.T) {
 		needle, hay string
 		want        bool
 	}{
-		{"ord", "orders", true},          // prefix
-		{"ord", "for orders", true},      // subsequence across the gap
-		{"ord", "o r d", true},           // subsequence with gaps
-		{"ord", "rdo", false},            // order broken: an anagram is not a subsequence
-		{"ord", "f rd", false},           // pattern rune missing entirely
-		{"", "anything", true},           // empty needle matches everything
-		{"xyz", "abc", false},            // no hit
-		{"K", "kelvin", true},            // orbit: K/k/KELVIN SIGN
-		{"\u212A", "kelvin", true},        // KELVIN SIGN matches k
-		{"kelvin", "\u212Aelvin", true},   // orbit runes in sequence
-		{"İ", "elvin", false},            // orbit must reject ToLower over-folding		{"\x00x", "abc\x00def", false},   // NUL truncation: needle past the NUL never matches
-		{"abc", "abc\x00def", true},      // NUL truncation keeps the hit before it
+		{"ord", "orders", true},         // prefix
+		{"ord", "for orders", true},     // subsequence across the gap
+		{"ord", "o r d", true},          // subsequence with gaps
+		{"ord", "rdo", false},           // order broken: an anagram is not a subsequence
+		{"ord", "f rd", false},          // pattern rune missing entirely
+		{"", "anything", true},          // empty needle matches everything
+		{"xyz", "abc", false},           // no hit
+		{"K", "kelvin", true},           // orbit: K/k/KELVIN SIGN
+		{"\u212A", "kelvin", true},      // KELVIN SIGN matches k
+		{"kelvin", "\u212Aelvin", true}, // orbit runes in sequence
+		{"İ", "elvin", false},           // orbit must reject ToLower over-folding
+		{"\x00x", "abc\x00def", false},  // a NUL in the needle matches nothing in the truncated haystack
+		{"def", "abc\x00def", false},    // NUL truncation: the match is past the NUL, so it never happens
+		{"abc", "abc\x00def", true},     // NUL truncation keeps the hit before it
 	}
 	for _, tc := range cases {
 		if got := MatchFold(tc.needle, tc.hay); got != tc.want {
