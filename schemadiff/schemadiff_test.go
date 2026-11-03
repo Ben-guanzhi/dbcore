@@ -2,6 +2,7 @@ package schemadiff
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -310,6 +311,109 @@ func TestCollectAndDiffOnRealSQLite(t *testing.T) {
 	}
 	if remaining := Diff(snapshotSource, after, Options{IgnoreForeignKeys: true}); len(remaining) != 0 {
 		t.Fatalf("sync did not converge, remaining: %+v", remaining)
+	}
+}
+
+// serializeEntries flattens a plan to a comparable string so two plans can be
+// compared byte for byte (K-F3 determinism contract).
+func serializeEntries(entries []Entry) string {
+	b, err := json.Marshal(entries)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// shuffleTables reorders a snapshot's tables, columns, indexes and foreign
+// keys with a fixed Fisher-Yates seed, on a deep copy: a plan must not depend
+// on the order the snapshot walked the schema in. Go map iteration order is
+// random, so any path that leaks it (or an array order that sortEntries'
+// stable tie-break merely preserves) shows up as a byte difference here.
+func shuffleTables(snap *Snapshot, seed int64) *Snapshot {
+	next := func(lo, hi int) int {
+		seed = (seed*1103515245 + 12345) & 0x7fffffff
+		return lo + int(seed%int64(hi-lo+1))
+	}
+	shuffle := func(n int, swap func(i, j int)) {
+		for i := n - 1; i > 0; i-- {
+			j := next(0, i)
+			swap(i, j)
+		}
+	}
+	out := *snap
+	out.Tables = make([]Table, len(snap.Tables))
+	for i, t := range snap.Tables {
+		nt := t
+		nt.Columns = make([]dbcore.ColumnInfo, len(t.Columns))
+		copy(nt.Columns, t.Columns)
+		nt.Indexes = make([]dbcore.IndexInfo, len(t.Indexes))
+		copy(nt.Indexes, t.Indexes)
+		nt.ForeignKeys = make([]dbcore.ForeignKeyInfo, len(t.ForeignKeys))
+		copy(nt.ForeignKeys, t.ForeignKeys)
+		out.Tables[i] = nt
+	}
+	shuffle(len(out.Tables), func(i, j int) { out.Tables[i], out.Tables[j] = out.Tables[j], out.Tables[i] })
+	for i := range out.Tables {
+		t := &out.Tables[i]
+		shuffle(len(t.Columns), func(a, b int) { t.Columns[a], t.Columns[b] = t.Columns[b], t.Columns[a] })
+		shuffle(len(t.Indexes), func(a, b int) { t.Indexes[a], t.Indexes[b] = t.Indexes[b], t.Indexes[a] })
+		shuffle(len(t.ForeignKeys), func(a, b int) { t.ForeignKeys[a], t.ForeignKeys[b] = t.ForeignKeys[b], t.ForeignKeys[a] })
+	}
+	return &out
+}
+
+// TestDiffDeterminismAcrossInputOrder is the K-F3 contract for the compare
+// plan: the same schema pair always yields the byte-identical plan, no matter
+// what order the snapshot walked tables in. sortEntries orders by
+// (phase, table, object, op), but SliceStable preserves generation order for
+// ties — generation order is the snapshot's Tables order — so the plan would
+// drift if any entry could tie. The corpus below spans every phase
+// (drop/create/alter/add column/create index/add fk) to make a tie reachable.
+func TestDiffDeterminismAcrossInputOrder(t *testing.T) {
+	source := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{
+		{Name: "author", Columns: []dbcore.ColumnInfo{
+			column("id", "bigint", false, ""), column("name", "text", true, ""),
+		}, Indexes: []dbcore.IndexInfo{pkIndex("author_pkey", "id")}},
+		{Name: "book", Columns: []dbcore.ColumnInfo{
+			column("id", "bigint", false, ""), column("author_id", "bigint", true, ""),
+			column("title", "text", true, ""),
+		}, Indexes: []dbcore.IndexInfo{
+			pkIndex("book_pkey", "id"), index("idx_book_title", false, false, "title"),
+		}, ForeignKeys: []dbcore.ForeignKeyInfo{fk("book_author_fk", []string{"author_id"}, "author", []string{"id"})}},
+		{Name: "contract", Columns: []dbcore.ColumnInfo{
+			column("id", "bigint", false, ""), column("amount", "numeric", true, "0"),
+		}, Indexes: []dbcore.IndexInfo{pkIndex("contract_pkey", "id")}},
+	}}
+	target := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{
+		{Name: "author", Columns: []dbcore.ColumnInfo{column("id", "bigint", false, "")},
+			Indexes: []dbcore.IndexInfo{pkIndex("author_pkey", "id")}},
+		{Name: "book", Columns: []dbcore.ColumnInfo{
+			column("id", "bigint", false, ""), column("author_id", "bigint", true, ""),
+			column("title", "text", true, "'untitled'"), // default change → alter column
+		}, Indexes: []dbcore.IndexInfo{
+			pkIndex("book_pkey", "id"), index("idx_book_author", false, false, "author_id"),
+		}, ForeignKeys: []dbcore.ForeignKeyInfo{fk("book_author_fk", []string{"author_id"}, "author", []string{"id"})}},
+		{Name: "contract", Columns: []dbcore.ColumnInfo{
+			column("id", "bigint", false, ""), column("amount", "numeric", false, ""), // nullability + default change
+		}, Indexes: []dbcore.IndexInfo{pkIndex("contract_pkey", "id")}},
+		{Name: "invoice", Columns: []dbcore.ColumnInfo{column("id", "bigint", false, "")},
+			Indexes: []dbcore.IndexInfo{pkIndex("invoice_pkey", "id")}}, // only in target → dropped
+	}}
+
+	reference := serializeEntries(Diff(source, target, Options{}))
+	if len(reference) == 0 || reference == "[]" {
+		t.Fatal("corpus produced no plan")
+	}
+	// Same input twice: byte-identical.
+	if got := serializeEntries(Diff(source, target, Options{})); got != reference {
+		t.Error("plan drifted between two identical runs")
+	}
+	// Shuffled input: the plan must be byte-identical to the reference.
+	for _, seed := range []int64{1, 7, 42, 1234, 99999} {
+		got := serializeEntries(Diff(shuffleTables(source, seed), shuffleTables(target, seed), Options{}))
+		if got != reference {
+			t.Errorf("plan drifted for seed %d: the plan must not depend on snapshot order", seed)
+		}
 	}
 }
 
