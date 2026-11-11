@@ -114,10 +114,10 @@ func AlterColumn(dbType, schema, table string, from, to Column) ([]string, strin
 			out = append(out, "ALTER TABLE "+object+" ALTER COLUMN "+column+" TYPE "+strings.TrimSpace(to.Type)+";")
 		}
 		if defaultChanged {
-			if value := strings.TrimSpace(to.DefaultValue); value == "" {
+			if defaultOf(to) == "" {
 				out = append(out, "ALTER TABLE "+object+" ALTER COLUMN "+column+" DROP DEFAULT;")
 			} else {
-				out = append(out, "ALTER TABLE "+object+" ALTER COLUMN "+column+" SET DEFAULT "+NormalizeDefault(dbType, value)+";")
+				out = append(out, "ALTER TABLE "+object+" ALTER COLUMN "+column+" SET DEFAULT "+NormalizeDefault(dbType, strings.TrimSpace(to.DefaultValue))+";")
 			}
 		}
 		if nullChanged {
@@ -281,23 +281,43 @@ func foreignKeyClause(dbType string, fk ForeignKey) string {
 	line := "ADD CONSTRAINT " + ident(dbType, fk.Name) + " FOREIGN KEY (" +
 		columnsList(dbType, fk.Columns) + ") REFERENCES " + referenced +
 		" (" + columnsList(dbType, fk.RefColumns) + ")"
-	if fk.OnDelete != "" && fk.OnDelete != "NO ACTION" {
-		line += " ON DELETE " + fk.OnDelete
+	// 白名单校验：只渲染标准 FK 动作，未知值跳过——NormalizeFKAction 的
+	// default 分支会透传未知值（前瞻兼容），直接拼接会把损坏的目录行变成
+	// 原始 SQL 注入。
+	if validFKAction(fk.OnDelete) && strings.ToUpper(fk.OnDelete) != "NO ACTION" {
+		line += " ON DELETE " + strings.ToUpper(fk.OnDelete)
 	}
-	if fk.OnUpdate != "" && fk.OnUpdate != "NO ACTION" {
-		line += " ON UPDATE " + fk.OnUpdate
+	if validFKAction(fk.OnUpdate) && strings.ToUpper(fk.OnUpdate) != "NO ACTION" {
+		line += " ON UPDATE " + strings.ToUpper(fk.OnUpdate)
 	}
 	return line
 }
 
+// validFKAction reports whether s is one of the five standard SQL
+// foreign-key actions. Only these may appear in a rendered clause; anything
+// else is dropped to prevent a corrupted catalog row from injecting raw SQL
+// into the DDL. NormalizeFKAction's default case passes unknown values
+// through (for forward compatibility with future actions), so the renderer
+// must not blindly concatenate them.
+func validFKAction(s string) bool {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "NO ACTION", "CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT":
+		return true
+	}
+	return false
+}
+
 // defaultOf reduces a column's default to the comparable form: some engines
 // report the absence of a default as the text "NULL", which must not read as a
-// real default.
+// real default. A column with no default and a column whose reported default
+// is the text "NULL" are therefore the same column — neither carries a
+// default the user set.
 func defaultOf(c Column) string {
-	if value := strings.TrimSpace(c.DefaultValue); value != "" {
-		return value
+	value := strings.TrimSpace(c.DefaultValue)
+	if value == "" || strings.EqualFold(value, "null") {
+		return ""
 	}
-	return ""
+	return value
 }
 
 func normSpace(s string) string {

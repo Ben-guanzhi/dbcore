@@ -217,26 +217,22 @@ func Diff(source, target *Snapshot, opts Options) []Entry {
 	if source == nil || target == nil {
 		return entries
 	}
+	// One de-dup counter shared by the whole pass: entryID counts how many
+	// entries already carry a base ID, and the plan is built in one walk.
+	ids := map[string]int{}
 
-	sourceTables := map[string]Table{}
-	for _, t := range source.Tables {
-		sourceTables[fold(t.Name)] = t
-	}
-	targetTables := map[string]Table{}
-	for _, t := range target.Tables {
-		targetTables[fold(t.Name)] = t
-	}
+	sourceTables := newNameIndex(source.Tables, func(t Table) string { return t.Name })
+	targetTables := newNameIndex(target.Tables, func(t Table) string { return t.Name })
 
 	for _, t := range source.Tables {
-		key := fold(t.Name)
-		other, ok := targetTables[key]
+		other, ok := matchName(sourceTables, targetTables, t.Name)
 		if !ok {
 			// A table the target lacks is created by one statement carrying its
 			// columns and primary key; its secondary indexes and foreign keys
 			// are separate entries, because they can only be built once the
 			// table exists (and, for a foreign key, once its target does).
 			entries = append(entries, Entry{
-				ID:     entryID(entries, t.Name, "", OpCreateTable),
+				ID:     entryID(ids, t.Name, "", OpCreateTable),
 				Op:     OpCreateTable,
 				Table:  t.Name,
 				Reason: fmt.Sprintf("目标库缺少表 %s（%d 列）", t.Name, len(t.Columns)),
@@ -244,22 +240,22 @@ func Diff(source, target *Snapshot, opts Options) []Entry {
 			})
 			empty := Table{Name: t.Name}
 			if !opts.IgnoreIndexes {
-				entries = append(entries, diffIndexes(t, empty)...)
+				entries = append(entries, diffIndexes(ids, t, empty)...)
 			}
 			if !opts.IgnoreForeignKeys {
-				entries = append(entries, diffForeignKeys(t, empty)...)
+				entries = append(entries, diffForeignKeys(ids, t, empty)...)
 			}
 			continue
 		}
-		entries = append(entries, diffTable(source.Kind, t, other, opts)...)
+		entries = append(entries, diffTable(ids, source.Kind, t, other, opts)...)
 	}
 
 	for _, t := range target.Tables {
-		if _, ok := sourceTables[fold(t.Name)]; ok {
+		if _, ok := matchName(targetTables, sourceTables, t.Name); ok {
 			continue
 		}
 		entries = append(entries, Entry{
-			ID:          entryID(entries, t.Name, "", OpDropTable),
+			ID:          entryID(ids, t.Name, "", OpDropTable),
 			Op:          OpDropTable,
 			Table:       t.Name,
 			Reason:      fmt.Sprintf("源库没有表 %s", t.Name),
@@ -274,23 +270,17 @@ func Diff(source, target *Snapshot, opts Options) []Entry {
 
 // diffTable compares two tables that exist on both sides. kind is the engine the
 // snapshots came from; it selects how a default is normalized.
-func diffTable(kind string, source, target Table, opts Options) []Entry {
+func diffTable(ids map[string]int, kind string, source, target Table, opts Options) []Entry {
 	var entries []Entry
 
-	sourceColumns := map[string]dbcore.ColumnInfo{}
-	for _, c := range source.Columns {
-		sourceColumns[fold(c.Name)] = c
-	}
-	targetColumns := map[string]dbcore.ColumnInfo{}
-	for _, c := range target.Columns {
-		targetColumns[fold(c.Name)] = c
-	}
+	sourceColumns := newNameIndex(source.Columns, func(c dbcore.ColumnInfo) string { return c.Name })
+	targetColumns := newNameIndex(target.Columns, func(c dbcore.ColumnInfo) string { return c.Name })
 
 	for _, c := range source.Columns {
-		other, ok := targetColumns[fold(c.Name)]
+		other, ok := matchName(sourceColumns, targetColumns, c.Name)
 		if !ok {
 			entries = append(entries, Entry{
-				ID:     entryID(entries, source.Name, c.Name, OpAddColumn),
+				ID:     entryID(ids, source.Name, c.Name, OpAddColumn),
 				Op:     OpAddColumn,
 				Table:  source.Name,
 				Object: c.Name,
@@ -302,7 +292,7 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 		}
 		if changed, from, to := columnDiff(kind, other, c, opts); changed {
 			entries = append(entries, Entry{
-				ID:          entryID(entries, source.Name, c.Name, OpAlterColumn),
+				ID:          entryID(ids, source.Name, c.Name, OpAlterColumn),
 				Op:          OpAlterColumn,
 				Table:       source.Name,
 				Object:      c.Name,
@@ -315,11 +305,11 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 		}
 	}
 	for _, c := range target.Columns {
-		if _, ok := sourceColumns[fold(c.Name)]; ok {
+		if _, ok := matchName(targetColumns, sourceColumns, c.Name); ok {
 			continue
 		}
 		entries = append(entries, Entry{
-			ID:          entryID(entries, source.Name, c.Name, OpDropColumn),
+			ID:          entryID(ids, source.Name, c.Name, OpDropColumn),
 			Op:          OpDropColumn,
 			Table:       source.Name,
 			Object:      c.Name,
@@ -335,7 +325,7 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 	switch {
 	case sourcePK != nil && targetPK == nil:
 		entries = append(entries, Entry{
-			ID:     entryID(entries, source.Name, sourcePK.Name, OpAddPrimaryKey),
+			ID:     entryID(ids, source.Name, sourcePK.Name, OpAddPrimaryKey),
 			Op:     OpAddPrimaryKey,
 			Table:  source.Name,
 			Object: sourcePK.Name,
@@ -345,7 +335,7 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 		})
 	case sourcePK == nil && targetPK != nil:
 		entries = append(entries, Entry{
-			ID:          entryID(entries, source.Name, targetPK.Name, OpDropPrimaryKey),
+			ID:          entryID(ids, source.Name, targetPK.Name, OpDropPrimaryKey),
 			Op:          OpDropPrimaryKey,
 			Table:       source.Name,
 			Object:      targetPK.Name,
@@ -357,7 +347,7 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 	case sourcePK != nil && targetPK != nil && !sameColumns(sourcePK.Columns, targetPK.Columns):
 		entries = append(entries,
 			Entry{
-				ID:          entryID(entries, source.Name, targetPK.Name, OpDropPrimaryKey),
+				ID:          entryID(ids, source.Name, targetPK.Name, OpDropPrimaryKey),
 				Op:          OpDropPrimaryKey,
 				Table:       source.Name,
 				Object:      targetPK.Name,
@@ -367,7 +357,7 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 				Destructive: true,
 			},
 			Entry{
-				ID:     entryID(entries, source.Name, sourcePK.Name, OpAddPrimaryKey),
+				ID:     entryID(ids, source.Name, sourcePK.Name, OpAddPrimaryKey),
 				Op:     OpAddPrimaryKey,
 				Table:  source.Name,
 				Object: sourcePK.Name,
@@ -379,10 +369,10 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 	}
 
 	if !opts.IgnoreIndexes {
-		entries = append(entries, diffIndexes(source, target)...)
+		entries = append(entries, diffIndexes(ids, source, target)...)
 	}
 	if !opts.IgnoreForeignKeys {
-		entries = append(entries, diffForeignKeys(source, target)...)
+		entries = append(entries, diffForeignKeys(ids, source, target)...)
 	}
 	return entries
 }
@@ -396,31 +386,19 @@ func diffTable(kind string, source, target Table, opts Options) []Entry {
 // it would ask for a rebuild the renderer cannot carry out, and building it
 // anyway would write a different index. Script names those indexes as warnings
 // so the gap is visible rather than silent.
-func diffIndexes(source, target Table) []Entry {
+func diffIndexes(ids map[string]int, source, target Table) []Entry {
 	var entries []Entry
-	sourceIdx := map[string]dbcore.IndexInfo{}
-	for _, i := range source.Indexes {
-		if i.Primary || !faithfulIndex(i) {
-			continue
-		}
-		sourceIdx[fold(i.Name)] = i
-	}
-	targetIdx := map[string]dbcore.IndexInfo{}
-	for _, i := range target.Indexes {
-		if i.Primary || !faithfulIndex(i) {
-			continue
-		}
-		targetIdx[fold(i.Name)] = i
-	}
+	sourceIdx := newNameIndex(source.Indexes, func(i dbcore.IndexInfo) string { return i.Name })
+	targetIdx := newNameIndex(target.Indexes, func(i dbcore.IndexInfo) string { return i.Name })
 
 	for _, i := range source.Indexes {
 		if i.Primary || !faithfulIndex(i) {
 			continue
 		}
-		other, ok := targetIdx[fold(i.Name)]
-		if !ok {
+		other, ok := matchName(sourceIdx, targetIdx, i.Name)
+		if !ok || other.Primary || !faithfulIndex(other) {
 			entries = append(entries, Entry{
-				ID:     entryID(entries, source.Name, i.Name, OpCreateIndex),
+				ID:     entryID(ids, source.Name, i.Name, OpCreateIndex),
 				Op:     OpCreateIndex,
 				Table:  source.Name,
 				Object: i.Name,
@@ -433,7 +411,7 @@ func diffIndexes(source, target Table) []Entry {
 		if other.Unique != i.Unique || !sameColumns(other.Columns, i.Columns) {
 			entries = append(entries,
 				Entry{
-					ID:          entryID(entries, source.Name, other.Name, OpDropIndex),
+					ID:          entryID(ids, source.Name, other.Name, OpDropIndex),
 					Op:          OpDropIndex,
 					Table:       source.Name,
 					Object:      other.Name,
@@ -443,7 +421,7 @@ func diffIndexes(source, target Table) []Entry {
 					Destructive: true,
 				},
 				Entry{
-					ID:     entryID(entries, source.Name, i.Name, OpCreateIndex),
+					ID:     entryID(ids, source.Name, i.Name, OpCreateIndex),
 					Op:     OpCreateIndex,
 					Table:  source.Name,
 					Object: i.Name,
@@ -458,11 +436,16 @@ func diffIndexes(source, target Table) []Entry {
 		if i.Primary || !faithfulIndex(i) {
 			continue
 		}
-		if _, ok := sourceIdx[fold(i.Name)]; ok {
+		// A target index is dropped unless a faithful source index matches it.
+		// An unfaithful source index (one the renderer cannot rebuild) does not
+		// protect the target index: it is left out of the plan and named as a
+		// warning instead.
+		if other, ok := matchName(targetIdx, sourceIdx, i.Name); ok &&
+			!other.Primary && faithfulIndex(other) {
 			continue
 		}
 		entries = append(entries, Entry{
-			ID:          entryID(entries, source.Name, i.Name, OpDropIndex),
+			ID:          entryID(ids, source.Name, i.Name, OpDropIndex),
 			Op:          OpDropIndex,
 			Table:       source.Name,
 			Object:      i.Name,
@@ -477,22 +460,16 @@ func diffIndexes(source, target Table) []Entry {
 
 // diffForeignKeys compares foreign keys by constraint name, which is their
 // identity in every engine's catalog.
-func diffForeignKeys(source, target Table) []Entry {
+func diffForeignKeys(ids map[string]int, source, target Table) []Entry {
 	var entries []Entry
-	sourceFK := map[string]dbcore.ForeignKeyInfo{}
-	for _, fk := range source.ForeignKeys {
-		sourceFK[fold(fk.Name)] = fk
-	}
-	targetFK := map[string]dbcore.ForeignKeyInfo{}
-	for _, fk := range target.ForeignKeys {
-		targetFK[fold(fk.Name)] = fk
-	}
+	sourceFK := newNameIndex(source.ForeignKeys, func(fk dbcore.ForeignKeyInfo) string { return fk.Name })
+	targetFK := newNameIndex(target.ForeignKeys, func(fk dbcore.ForeignKeyInfo) string { return fk.Name })
 
 	for _, fk := range source.ForeignKeys {
-		other, ok := targetFK[fold(fk.Name)]
+		other, ok := matchName(sourceFK, targetFK, fk.Name)
 		if !ok {
 			entries = append(entries, Entry{
-				ID:     entryID(entries, source.Name, fk.Name, OpAddForeignKey),
+				ID:     entryID(ids, source.Name, fk.Name, OpAddForeignKey),
 				Op:     OpAddForeignKey,
 				Table:  source.Name,
 				Object: fk.Name,
@@ -505,7 +482,7 @@ func diffForeignKeys(source, target Table) []Entry {
 		if fkSpec(other) != fkSpec(fk) {
 			entries = append(entries,
 				Entry{
-					ID:          entryID(entries, source.Name, other.Name, OpDropForeignKey),
+					ID:          entryID(ids, source.Name, other.Name, OpDropForeignKey),
 					Op:          OpDropForeignKey,
 					Table:       source.Name,
 					Object:      other.Name,
@@ -515,7 +492,7 @@ func diffForeignKeys(source, target Table) []Entry {
 					Destructive: true,
 				},
 				Entry{
-					ID:     entryID(entries, source.Name, fk.Name, OpAddForeignKey),
+					ID:     entryID(ids, source.Name, fk.Name, OpAddForeignKey),
 					Op:     OpAddForeignKey,
 					Table:  source.Name,
 					Object: fk.Name,
@@ -527,11 +504,11 @@ func diffForeignKeys(source, target Table) []Entry {
 		}
 	}
 	for _, fk := range target.ForeignKeys {
-		if _, ok := sourceFK[fold(fk.Name)]; ok {
+		if _, ok := matchName(targetFK, sourceFK, fk.Name); ok {
 			continue
 		}
 		entries = append(entries, Entry{
-			ID:          entryID(entries, source.Name, fk.Name, OpDropForeignKey),
+			ID:          entryID(ids, source.Name, fk.Name, OpDropForeignKey),
 			Op:          OpDropForeignKey,
 			Table:       source.Name,
 			Object:      fk.Name,
@@ -572,19 +549,18 @@ func sortEntries(entries []Entry) {
 }
 
 // entryID builds a stable identifier and de-duplicates it, because a rebuild
-// emits two entries for the same object (drop + add).
-func entryID(existing []Entry, table, object string, op Op) string {
+// emits two entries for the same object (drop + add). ids carries the per-base
+// counter across one Diff pass: scanning the grown plan for every new entry
+// was Θ(n²) in plan size — millions of HasPrefix calls on a schema with
+// thousands of columns, inside a user-facing compare click.
+func entryID(ids map[string]int, table, object string, op Op) string {
 	base := table + "/" + object + "/" + string(op)
-	count := 0
-	for _, e := range existing {
-		if strings.HasPrefix(e.ID, base) {
-			count++
-		}
-	}
-	if count == 0 {
+	n := ids[base] + 1
+	ids[base] = n
+	if n == 1 {
 		return base
 	}
-	return fmt.Sprintf("%s#%d", base, count+1)
+	return fmt.Sprintf("%s#%d", base, n)
 }
 
 func primaryKeyOf(t Table) *dbcore.IndexInfo {
@@ -604,7 +580,7 @@ func columnSpec(c dbcore.ColumnInfo) string {
 	} else {
 		spec += " NULL"
 	}
-	if value := normDefault("", c.Default); value != "" {
+	if value := defaultValue(c.Default); value != "" {
 		spec += " DEFAULT " + value
 	}
 	return spec
@@ -668,15 +644,39 @@ func fkSpec(fk dbcore.ForeignKeyInfo) string {
 	return spec
 }
 
-// normDefault reduces a column default to a comparable form: "no default" and a
-// reported "NULL" both mean none, and the surrounding whitespace and quoting an
-// engine adds must not read as a difference.
+// noDefault is the sentinel normDefault returns for "no default" (nil or a
+// reported "NULL"). It is distinct from "" so that an empty-string default
+// (`DEFAULT ”`) is not confused with no default — both used to collapse to
+// the same empty string after quote-trimming, which made the schema diff miss
+// the change and the DDL renderer drop the DEFAULT clause.
+const noDefault = "\x00"
+
+// normDefault reduces a column default to a comparable form for schema diff.
+// "no default" (nil or "NULL") maps to the noDefault sentinel; everything else
+// has surrounding whitespace and one layer of quoting stripped so that
+// `'hello'` and `hello` compare equal. The empty-string default `”` strips
+// to "" which is distinct from noDefault — the two are no longer conflated.
 func normDefault(kind string, value *string) string {
+	if value == nil {
+		return noDefault
+	}
+	text := strings.TrimSpace(*value)
+	if strings.EqualFold(text, "null") {
+		return noDefault
+	}
+	text = strings.Trim(text, "'")
+	return text
+}
+
+// defaultValue returns the raw default value for DDL rendering. Unlike
+// normDefault it does NOT strip quoting — the DDL generator needs the original
+// form to render `DEFAULT ”` (empty string) and `DEFAULT 'hello'` correctly.
+// Returns "" for no default (nil or "NULL").
+func defaultValue(value *string) string {
 	if value == nil {
 		return ""
 	}
 	text := strings.TrimSpace(*value)
-	text = strings.Trim(text, "'")
 	if strings.EqualFold(text, "null") {
 		return ""
 	}
@@ -704,4 +704,71 @@ func sameColumns(a, b []string) bool {
 // treated case as significant would report differences that do not exist.
 func fold(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// nameIndex indexes a snapshot's objects for lookup by name.
+//
+// Engines disagree on case (Oracle folds unquoted identifiers to upper, MySQL's
+// sensitivity is filesystem-dependent), so a source object is matched against a
+// target object whose name folds equal. But the index is keyed by the raw name,
+// never by the folded name alone: PostgreSQL, SQLite, SQL Server and Oracle all
+// allow quoted identifiers that differ only in case, so `"T"` and `"t"` are two
+// distinct tables that fold onto one key. Keying a map by the folded name made
+// the second write overwrite the first, and with it the shadowed object's
+// entire diff — source {T, t} against target {T} produced no entries at all.
+type nameIndex[T any] struct {
+	items     []T
+	byName    map[string]int
+	byFold    map[string][]int
+	ambiguous map[string]bool // fold keys shared by two or more distinct raw names
+}
+
+func newNameIndex[T any](items []T, name func(T) string) nameIndex[T] {
+	ix := nameIndex[T]{
+		items:     items,
+		byName:    make(map[string]int, len(items)),
+		byFold:    make(map[string][]int, len(items)),
+		ambiguous: map[string]bool{},
+	}
+	foldNames := make(map[string]map[string]bool, len(items))
+	for i, it := range items {
+		n := name(it)
+		if _, dup := ix.byName[n]; !dup {
+			ix.byName[n] = i
+		}
+		k := fold(n)
+		if foldNames[k] == nil {
+			foldNames[k] = map[string]bool{}
+		}
+		foldNames[k][n] = true
+		ix.byFold[k] = append(ix.byFold[k], i)
+	}
+	for k, names := range foldNames {
+		if len(names) > 1 {
+			ix.ambiguous[k] = true
+		}
+	}
+	return ix
+}
+
+// matchName finds the entry in ix corresponding to name. An exact raw-name
+// match wins. Otherwise the name is matched case-insensitively only when the
+// fold key names exactly one distinct raw name on each side; a fold key shared
+// by two or more distinct raw names is ambiguous and reports a miss, so the
+// caller emits an entry instead of collapsing one object onto another and
+// silently dropping its diff.
+func matchName[T any](self, ix nameIndex[T], name string) (T, bool) {
+	var zero T
+	if i, ok := ix.byName[name]; ok {
+		return ix.items[i], true
+	}
+	k := fold(name)
+	if self.ambiguous[k] || ix.ambiguous[k] {
+		return zero, false
+	}
+	cands := ix.byFold[k]
+	if len(cands) != 1 {
+		return zero, false
+	}
+	return ix.items[cands[0]], true
 }

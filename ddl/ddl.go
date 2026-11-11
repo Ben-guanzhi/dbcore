@@ -126,13 +126,178 @@ func tableName(dbType, schema, table string) string {
 
 // ident quotes one identifier; an engine that cannot quote the name (unknown
 // type, invalid characters) yields the bare name rather than failing the whole
-// reading aid.
+// reading aid. The reading aid (exported DDL scripts for humans) is exactly
+// where this fallback belongs; a caller that EXECUTES the rendered statement
+// (structure edit) must run ValidatedIdent instead, because an unquotable
+// attacker-controlled name becomes raw SQL there.
 func ident(dbType, part string) string {
 	quoted, err := sqltext.QuoteIdent(dbType, part)
 	if err != nil {
 		return part
 	}
 	return quoted
+}
+
+// ValidatedIdent is ident for execution paths: a name the engine cannot quote
+// fails the render instead of landing in the statement bare. The structure
+// editor runs every statement it renders, so a newline inside a column name
+// (QuoteIdent rejects it) must abort the operation, not smuggle a second
+// statement through the fallback.
+func ValidatedIdent(dbType, part string) (string, error) {
+	quoted, err := sqltext.QuoteIdent(dbType, part)
+	if err != nil {
+		return "", fmt.Errorf("identifier %q cannot be quoted for %s: %w", part, dbType, err)
+	}
+	return quoted, nil
+}
+
+// ValidateColumnType checks that a client-supplied type name is a bare type
+// word (letters, digits, spaces, and at most one parameterized length). The
+// structure editor renders it straight into `ALTER TABLE … ADD COLUMN <name>
+// <type>`, so a separator inside the type (`int; DROP TABLE users;--`) would
+// run a second statement. Types that legitimately carry punctuation (the
+// parameter list) pass through the parenthesized-tail check; anything with a
+// statement separator, a comment, or a quote is refused.
+func ValidateColumnType(dbType, dataType string) error {
+	t := strings.TrimSpace(dataType)
+	if t == "" {
+		return fmt.Errorf("column type is empty")
+	}
+	if len(t) > 128 {
+		return fmt.Errorf("column type %q is too long", dataType)
+	}
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			// type word characters
+		case c == ' ', c == '\t':
+			// word separator (double precision, timestamp with time zone)
+		case c == '(' || c == ')':
+			// parameterized length: decimal(10,2), varchar(255)
+		case c == ',':
+			// parameter separator
+		case c == '-', c == '_':
+			// hyphenated/underscored names (time-tz, user_defined)
+		default:
+			return fmt.Errorf("column type %q contains character %q, which a type name cannot",
+				dataType, string(c))
+		}
+	}
+	// A parenthesized tail must be balanced and trailing.
+	depth := 0
+	lastClose := -1
+	for i := 0; i < len(t); i++ {
+		switch t[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("column type %q has unbalanced parentheses", dataType)
+			}
+			lastClose = i
+		}
+	}
+	if depth != 0 {
+		return fmt.Errorf("column type %q has unbalanced parentheses", dataType)
+	}
+	// `--` is a SQL line comment: the validator's own doc promises to refuse
+	// comments, but `-` is a legitimate hyphen character in type names
+	// (time-tz), so a naive character scan lets `int--foo` through. The `--`
+	// would swallow the rest of the DDL line — including `NOT NULL` and
+	// subsequent column definitions — when rendered into ALTER TABLE.
+	if strings.Contains(t, "--") {
+		return fmt.Errorf("column type %q contains a comment (--), which a type name cannot", dataType)
+	}
+	if lastClose >= 0 && strings.TrimSpace(t[lastClose+1:]) != "" {
+		return fmt.Errorf("column type %q has content after the parameter list", dataType)
+	}
+	_ = dbType
+	return nil
+}
+
+// ValidateDefault checks that a client-supplied DEFAULT value cannot smuggle a
+// statement separator. Defaults are rendered verbatim (`DEFAULT <value>`) — a
+// `1); DROP TABLE users;--` default would close the column and run a second
+// statement. Literal text is allowed only as a quoted literal or a bare
+// numeric/keyword token; anything carrying a separator, a comment, or an
+// unbalanced quote is refused.
+func ValidateDefault(value string) error {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		// No default is the common case: columnDef only renders DEFAULT when
+		// the value is non-empty, so an empty field is valid, not an error.
+		return nil
+	}
+	if len(v) > 256 {
+		return fmt.Errorf("default value %q is too long", value)
+	}
+	// Count unescaped single quotes: an odd count means an unterminated
+	// literal, which swallows the rest of the statement.
+	quotes := strings.Count(v, "'")
+	if quotes%2 != 0 {
+		return fmt.Errorf("default value %q has an unterminated string literal", value)
+	}
+	// Strip quoted literals first, then the remainder must be free of
+	// separators and comments.
+	stripped := stripQuotedLiterals(v)
+	for i := 0; i < len(stripped); i++ {
+		c := stripped[i]
+		if c == ';' {
+			return fmt.Errorf("default value %q contains a statement separator", value)
+		}
+		if c == '-' && i+1 < len(stripped) && stripped[i+1] == '-' {
+			return fmt.Errorf("default value %q contains a comment", value)
+		}
+		if c == '/' && i+1 < len(stripped) && stripped[i+1] == '*' {
+			return fmt.Errorf("default value %q contains a comment", value)
+		}
+	}
+	// A closing paren before any opening one closes the column definition and
+	// turns the tail into raw SQL.
+	depth := 0
+	for i := 0; i < len(stripped); i++ {
+		switch stripped[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("default value %q closes a parenthesis it did not open", value)
+			}
+		}
+	}
+	return nil
+}
+
+// stripQuotedLiterals replaces the content of every single-quoted literal with
+// a placeholder, so separator scans see only the code between them. Doubled
+// quotes (”) inside a literal are consumed as one.
+func stripQuotedLiterals(v string) string {
+	var b strings.Builder
+	b.Grow(len(v))
+	inQuote := false
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c != '\'' {
+			if !inQuote {
+				b.WriteByte(c)
+			}
+			continue
+		}
+		// A quote: either it opens/closes a literal, or it is a doubled quote
+		// inside one.
+		if i+1 < len(v) && v[i+1] == '\'' {
+			i++ // doubled quote: consume both
+			continue
+		}
+		inQuote = !inQuote
+		if !inQuote {
+			b.WriteByte('\'') // keep the closing delimiter visible
+		}
+	}
+	return b.String()
 }
 
 func columnsList(dbType string, names []string) string {

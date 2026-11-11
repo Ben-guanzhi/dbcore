@@ -176,6 +176,60 @@ func TestScriptReportsAnUnexpressableDefaultChange(t *testing.T) {
 	}
 }
 
+// TestEmptyStringDefaultIsNotNoDefault pins the distinction between
+// `DEFAULT ”` (empty string) and no default (nil/NULL). Both used to
+// collapse to "" after quote-trimming, so the schema diff missed the
+// change and the DDL renderer dropped the DEFAULT clause entirely.
+func TestEmptyStringDefaultIsNotNoDefault(t *testing.T) {
+	// '' (empty string default) vs nil (no default) → change
+	source := &Snapshot{Kind: sqltext.Postgres, Schema: "app", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("c", "varchar(10)", true, "''")},
+	}}}
+	target := &Snapshot{Kind: sqltext.Postgres, Schema: "app", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("c", "varchar(10)", true, "")},
+	}}}
+	entries := Diff(source, target, Options{})
+	if len(entries) != 1 || entries[0].Op != OpAlterColumn {
+		t.Fatalf("entries = %+v, want the default-only alter ('\\'' → no default)", entries)
+	}
+
+	// reverse: nil (no default) vs '' (empty string default) → change
+	source2 := &Snapshot{Kind: sqltext.Postgres, Schema: "app", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("c", "varchar(10)", true, "")},
+	}}}
+	target2 := &Snapshot{Kind: sqltext.Postgres, Schema: "app", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("c", "varchar(10)", true, "''")},
+	}}}
+	entries2 := Diff(source2, target2, Options{})
+	if len(entries2) != 1 || entries2[0].Op != OpAlterColumn {
+		t.Fatalf("entries = %+v, want the default-only alter (no default → '\\'')", entries2)
+	}
+
+	// '' vs '' → no change
+	source3 := &Snapshot{Kind: sqltext.Postgres, Schema: "app", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("c", "varchar(10)", true, "''")},
+	}}}
+	target3 := &Snapshot{Kind: sqltext.Postgres, Schema: "app", Tables: []Table{{
+		Name:    "t",
+		Columns: []dbcore.ColumnInfo{column("c", "varchar(10)", true, "''")},
+	}}}
+	entries3 := Diff(source3, target3, Options{})
+	if len(entries3) != 0 {
+		t.Fatalf("entries = %+v, want none ('' vs '')", entries3)
+	}
+
+	// columnSpec renders DEFAULT '' for empty string default
+	spec := columnSpec(column("c", "varchar(10)", true, "''"))
+	if !strings.Contains(spec, "DEFAULT ''") {
+		t.Errorf("columnSpec = %q, want it to carry DEFAULT ''", spec)
+	}
+}
+
 func TestDiffMatchesNamesCaseInsensitively(t *testing.T) {
 	// Oracle folds identifiers to upper case; a comparison that treated case as
 	// significant would report every column as both added and dropped.
@@ -189,6 +243,78 @@ func TestDiffMatchesNamesCaseInsensitively(t *testing.T) {
 	}}}
 	if got := Diff(source, target, Options{}); len(got) != 0 {
 		t.Errorf("case-only name differences must not be changes: %+v", got)
+	}
+}
+
+// A name that folds onto another name is not the same object when both spellings
+// exist. PostgreSQL, SQLite, SQL Server and Oracle all allow quoted identifiers
+// that differ only in case, so source {T, t} and target {T} are three tables
+// with one common name — not two tables with one name. The comparison used to
+// key its lookup maps on the folded name, so the second write overwrote the
+// first and the shadowed table's entire diff disappeared from the plan.
+func TestDiffKeepsCaseOnlyDistinctObjects(t *testing.T) {
+	cols := func() []dbcore.ColumnInfo {
+		return []dbcore.ColumnInfo{column("id", "integer", false, "")}
+	}
+	source := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{
+		{Name: "T", Columns: cols()},
+		{Name: "t", Columns: cols()},
+	}}
+	target := &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{
+		{Name: "T", Columns: cols()},
+	}}
+	got := Diff(source, target, Options{})
+	if len(got) == 0 {
+		t.Fatalf("the shadowed table must produce a diff entry, got none")
+	}
+	// The plan must name the shadowed twin, not the one that survived the fold.
+	named := map[string]bool{}
+	for _, e := range got {
+		named[e.Table] = true
+	}
+	if !named["t"] {
+		t.Errorf("the shadowed table %q must appear in the plan; tables seen: %v", "t", named)
+	}
+
+	// The reverse direction: a target table whose name folds onto a source
+	// name must be dropped, not merged into it.
+	got = Diff(target, source, Options{})
+	named = map[string]bool{}
+	for _, e := range got {
+		named[e.Table] = true
+	}
+	if !named["t"] {
+		t.Errorf("a target table that shares a folded name with a source table must be dropped; tables seen: %v", named)
+	}
+	dropped := false
+	for _, e := range got {
+		if e.Table == "t" && e.Op == OpDropTable {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Errorf("the target table %q must be dropped as a table; entries: %+v", "t", got)
+	}
+
+	// The same shape inside one table's columns.
+	srcCols := []dbcore.ColumnInfo{column("ID", "integer", false, ""), column("id", "integer", false, "")}
+	dstCols := []dbcore.ColumnInfo{column("ID", "integer", false, "")}
+	got = Diff(&Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{
+		{Name: "t", Columns: srcCols},
+	}}, &Snapshot{Kind: sqltext.Postgres, Schema: "public", Tables: []Table{
+		{Name: "t", Columns: dstCols},
+	}}, Options{})
+	if len(got) == 0 {
+		t.Fatalf("the shadowed column must produce a diff entry, got none")
+	}
+	found := false
+	for _, e := range got {
+		if e.Object == "id" && e.Op == OpAddColumn {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the shadowed column %q must appear as an add; entries: %+v", "id", got)
 	}
 }
 

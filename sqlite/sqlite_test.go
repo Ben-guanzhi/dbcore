@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	"github.com/dbcore/dbcore"
@@ -74,6 +75,35 @@ func TestSQLiteMetadataExtras(t *testing.T) {
 	}
 }
 
+// TestListForeignKeysPropagatesQueryError pins the error contract: a failed
+// catalog query must propagate, not be swallowed into an empty FK list. The
+// old code returned (nil, nil) on any RunQuery error, which made a permission
+// failure or closed connection look like "this table has no foreign keys" —
+// the schemadiff then planned to DROP constraints that actually exist.
+func TestListForeignKeysPropagatesQueryError(t *testing.T) {
+	d, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	ctx := context.Background()
+	if _, err := d.Execute(ctx, `CREATE TABLE parent(id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := d.Execute(ctx, `CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id))`); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	// Cancel the context before the call: QueryContext must return an error,
+	// and ListForeignKeys must propagate it rather than returning (nil, nil).
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = d.ListForeignKeys(cancelledCtx, "main", "child")
+	if err == nil {
+		t.Fatal("ListForeignKeys with cancelled context: expected error, got nil")
+	}
+}
+
 // TestNewFromDB documents the borrowed-handle contract used by client pools:
 // Close is a no-op and catalog reads still work while the caller owns the DB.
 func TestNewFromDB(t *testing.T) {
@@ -110,6 +140,12 @@ func TestSQLiteContract(t *testing.T) {
 		Schema:      "main",
 		Placeholder: func(idx int) string { return "?" },
 		Kind:        dbcore.KindSQLite,
+		// SQLite has no timestamp type; the driver maps a declared TIMESTAMP
+		// column onto ValTime by name. That mapping is exactly what the
+		// value-kind contract checks, so the fixture declares the type.
+		TimestampDDL: func(table string) []string {
+			return []string{fmt.Sprintf("CREATE TABLE %s (id INTEGER, at TIMESTAMP)", table)}
+		},
 	}
 	h.Run(t)
 }

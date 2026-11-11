@@ -175,8 +175,12 @@ func (d *SQLiteDriver) ListIndexes(ctx context.Context, schema, table string) ([
 		LEFT JOIN sqlite_master m ON m.type = 'index' AND m.name = i.name`
 	res, err := dbcore.RunQuery(ctx, d.db, q, []dbcore.Value{{Kind: dbcore.ValText, S: table}})
 	if err != nil {
-		// pragma_index_list failing (e.g. view) is not fatal for catalog listing.
-		return nil, nil
+		// pragma_index_list 对视图/不存在的表返回空结果集而非报错——
+		// 空结果路径已经覆盖了这些"无索引"场景。走到这里只可能是真实
+		// 错误（权限拒绝、数据库锁定、表在列举后被删除等），必须传播：
+		// 吞成 nil,nil 会让 schemadiff 把"查不到索引"当成"该删索引"，
+		// 静默产出 DROP 计划。与 MySQL/Postgres/MSSQL/Oracle 驱动一致。
+		return nil, err
 	}
 	out := make([]dbcore.IndexInfo, 0, len(res.Rows))
 	for _, r := range res.Rows {
@@ -239,7 +243,11 @@ func (d *SQLiteDriver) ListForeignKeys(ctx context.Context, schema, table string
 	q, a := d.dialect.CatalogQuery(dbcore.CatalogForeignKeys, schema, table)
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
-		return nil, nil
+		// 传播而非吞成"无外键"——pragma_foreign_key_list 对无外键的表返回
+		// 空结果（非错误），只有真实 SQL 错误（权限、连接、表名损坏）才走到
+		// 这里。吞掉后调用方误以为表没有外键，schemadiff 生成错误的 DROP FK
+		// 计划。BatchForeignKeys（第 280 行）和其它驱动都传播错误。
+		return nil, err
 	}
 	// pragma_foreign_key_list answers one row per column pair under a shared id;
 	// SQLite stores no constraint name, so the id becomes a stable synthetic one.
@@ -341,8 +349,12 @@ func (d *SQLiteDriver) BrowseRows(ctx context.Context, schema, table string, req
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
 	cq, ca := d.dialect.BuildCountQuery(schema, table, req)
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
-		out.Total = uint64(cres.Rows[0][0].I)
-		out.TotalFound = true
+		// Kind-aware: modernc may deliver the count as int64 or text —
+		// reading .I blind answered 0 for the text shape.
+		if total, ok := dbcore.UintFromValue(cres.Rows[0][0]); ok {
+			out.Total = total
+			out.TotalFound = true
+		}
 	}
 	return out, nil
 }
@@ -357,7 +369,10 @@ func (d *SQLiteDriver) BrowseRowsCount(ctx context.Context, schema, table string
 	if len(res.Rows) == 0 {
 		return 0, nil
 	}
-	return uint64(res.Rows[0][0].I), nil
+	if n, ok := dbcore.UintFromValue(res.Rows[0][0]); ok {
+		return n, nil
+	}
+	return 0, fmt.Errorf("count query returned a non-integer value")
 }
 
 // SQLiteDialect implements dbcore.Dialect for SQLite.

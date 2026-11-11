@@ -223,7 +223,7 @@ func ddlColumn(c dbcore.ColumnInfo) ddl.Column {
 		Name:         c.Name,
 		Type:         c.Type,
 		Nullable:     c.Nullable,
-		DefaultValue: normDefault("", c.Default),
+		DefaultValue: defaultValue(c.Default),
 	}
 }
 

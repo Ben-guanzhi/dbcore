@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/dbcore/dbcore"
@@ -12,8 +13,18 @@ func TestDSNEmptyFileIsInMemory(t *testing.T) {
 	if got := sqlite.DSN(dbcore.ConnSpec{Kind: dbcore.KindSQLite}); got != ":memory:" {
 		t.Fatalf("DSN() = %q, want :memory:", got)
 	}
-	if got := sqlite.DSN(dbcore.ConnSpec{Kind: dbcore.KindSQLite, File: "C:/tmp/x.db"}); got != "C:/tmp/x.db" {
-		t.Fatalf("DSN() = %q", got)
+	// A file DSN carries the pool-wide pragmas: modernc runs `_pragma` query
+	// parameters on every physical connection, so busy_timeout/synchronous
+	// apply to the pool's secondary connections too (the per-connection Exec
+	// in OpenSpec only ever touched the first one).
+	got := sqlite.DSN(dbcore.ConnSpec{Kind: dbcore.KindSQLite, File: "C:/tmp/x.db"})
+	for _, want := range []string{"_pragma=journal_mode", "_pragma=busy_timeout", "_pragma=synchronous"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("DSN() = %q, missing %s", got, want)
+		}
+	}
+	if !strings.HasPrefix(got, "C:/tmp/x.db") {
+		t.Errorf("DSN() = %q, want the file path as prefix", got)
 	}
 }
 
