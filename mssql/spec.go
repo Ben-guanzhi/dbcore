@@ -67,5 +67,7 @@ func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig)
 		_ = db.Close()
 		return nil, err
 	}
-	return &MSSQLDriver{db: db, dialect: &MSSQLDialect{}, owned: true}, nil
+	d := &MSSQLDriver{db: db, dialect: &MSSQLDialect{}, owned: true}
+	d.initWide()
+	return d, nil
 }

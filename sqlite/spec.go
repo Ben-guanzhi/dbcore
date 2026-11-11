@@ -80,5 +80,7 @@ func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig)
 			}
 		}
 	}
-	return &SQLiteDriver{db: db, dialect: &SQLiteDialect{}, owned: true}, nil
+	d := &SQLiteDriver{db: db, dialect: &SQLiteDialect{}, owned: true}
+	d.initWide()
+	return d, nil
 }

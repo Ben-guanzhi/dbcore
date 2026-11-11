@@ -110,5 +110,7 @@ func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig)
 		_ = db.Close()
 		return nil, err
 	}
-	return &MySQLDriver{db: db, dialect: &MySQLDialect{}, owned: true}, nil
+	d := &MySQLDriver{db: db, dialect: &MySQLDialect{}, owned: true}
+	d.initWide()
+	return d, nil
 }

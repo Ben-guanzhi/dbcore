@@ -114,5 +114,7 @@ func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig)
 		_ = db.Close()
 		return nil, err
 	}
-	return &PostgresDriver{db: db, dialect: &PostgresDialect{}, owned: true}, nil
+	d := &PostgresDriver{db: db, dialect: &PostgresDialect{}, owned: true}
+	d.initWide()
+	return d, nil
 }

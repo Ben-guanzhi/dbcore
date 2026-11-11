@@ -54,5 +54,7 @@ func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig)
 		_ = db.Close()
 		return nil, err
 	}
-	return &OracleDriver{db: db, dialect: &OracleDialect{}, owned: true}, nil
+	d := &OracleDriver{db: db, dialect: &OracleDialect{}, owned: true}
+	d.initWide()
+	return d, nil
 }
