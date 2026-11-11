@@ -429,11 +429,16 @@ func defaultSchemaIdentity(schema string) string {
 // by this package. Clients persist several spellings ("postgres"/"postgresql",
 // "mssql"/"sqlserver", "mariadb"/"mysql"), so every entry point normalizes
 // instead of requiring each caller to agree on one.
+//
+// 协议兼容引擎也在这里归一: OceanBase MySQL 模式 / GreatSQL / StarRocks / Doris(FE)
+// 走 MySQL 线协议, openGauss / GaussDB / 人大金仓 KingbaseES 走 PostgreSQL 线协议。
+// 它们的 SQL 方言、目录查询与占位符与底层引擎一致, 因此复用对应 dialect 即可,
+// 客户端不需要为新引擎实现第二套方言。
 func Normalize(dbType string) string {
 	switch strings.ToLower(strings.TrimSpace(dbType)) {
-	case "mariadb":
+	case "mariadb", "greatsql", "starrocks", "doris", "oceanbase":
 		return MySQL
-	case "postgres", "pg":
+	case "postgres", "pg", "opengauss", "gaussdb", "kingbase", "kingbasees":
 		return Postgres
 	case "sqlserver", "mssql", "sql server":
 		return SQLServer

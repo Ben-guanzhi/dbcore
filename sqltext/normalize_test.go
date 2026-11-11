@@ -13,6 +13,17 @@ func TestNormalizeAliases(t *testing.T) {
 		"sqlite":       SQLite,
 		"oracle":       Oracle,
 		" PostgreSQL ": Postgres,
+		// 协议兼容引擎: 与底层引擎共用同一 dialect (OceanBase MySQL 模式走 MySQL
+		// 线协议, openGauss/GaussDB/金仓走 PG 线协议)。
+		"oceanbase":  MySQL,
+		"greatsql":   MySQL,
+		"starrocks":  MySQL,
+		"doris":      MySQL,
+		" OceanBase": MySQL,
+		"opengauss":  Postgres,
+		"gaussdb":    Postgres,
+		"kingbase":   Postgres,
+		"kingbasees": Postgres,
 	}
 	for in, want := range cases {
 		if got := Normalize(in); got != want {
