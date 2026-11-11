@@ -43,6 +43,73 @@ type ForeignKey struct {
 	OnUpdate   string
 }
 
+// CreateTableInline is CreateTable with the foreign keys rendered INSIDE the
+// CREATE body instead of as trailing ALTER TABLE statements.
+//
+// It exists because some engines have no ALTER TABLE ... ADD CONSTRAINT at all
+// (SQLite; see CanAddForeignKey). On those, a constraint can only be declared
+// where the table is built, so a copy or a rebuild must reach for this form. On
+// engines that CAN add a constraint later, prefer CreateTable: the constraint
+// order then does not matter, which is what lets a cyclic schema be built at all.
+//
+// Indexes are rendered the same way CreateTable renders them (primary key inside
+// the body, secondary indexes as separate CREATE INDEX statements), so the two
+// functions differ only in where the FOREIGN KEY clauses live.
+func CreateTableInline(dbType, schema, table string, columns []Column, fullTypes map[string]string, indexes []Index, foreignKeys []ForeignKey) string {
+	object := tableName(dbType, schema, table)
+
+	definitions := make([]string, 0, len(columns)+len(foreignKeys)+1)
+	for _, column := range columns {
+		if full, ok := fullTypes[column.Name]; ok && full != "" {
+			column.Type = full
+		}
+		definitions = append(definitions, "  "+columnDef(dbType, column))
+	}
+	for _, index := range indexes {
+		if !index.Primary {
+			continue
+		}
+		definitions = append(definitions,
+			"  CONSTRAINT "+ident(dbType, index.Name)+" PRIMARY KEY ("+columnsList(dbType, index.Columns)+")")
+	}
+	for _, fk := range foreignKeys {
+		definitions = append(definitions, "  "+inlineForeignKeyClause(dbType, fk))
+	}
+
+	statements := []string{"CREATE TABLE " + object + " (\n" + strings.Join(definitions, ",\n") + "\n);"}
+
+	for _, index := range indexes {
+		if index.Primary || len(index.Columns) == 0 {
+			continue
+		}
+		unique := ""
+		if index.Unique {
+			unique = "UNIQUE "
+		}
+		statements = append(statements, fmt.Sprintf("CREATE %sINDEX %s ON %s (%s);",
+			unique, ident(dbType, index.Name), object, columnsList(dbType, index.Columns)))
+	}
+	return strings.Join(statements, "\n\n")
+}
+
+// inlineForeignKeyClause renders a FOREIGN KEY table constraint, the form that
+// lives inside CREATE TABLE. It differs from foreignKeyClause only in dropping
+// the "ADD CONSTRAINT" verb: the constraint keyword, the column lists and the
+// action whitelist are shared.
+func inlineForeignKeyClause(dbType string, fk ForeignKey) string {
+	referenced := tableName(dbType, fk.RefSchema, fk.RefTable)
+	line := "CONSTRAINT " + ident(dbType, fk.Name) + " FOREIGN KEY (" +
+		columnsList(dbType, fk.Columns) + ") REFERENCES " + referenced +
+		" (" + columnsList(dbType, fk.RefColumns) + ")"
+	if validFKAction(fk.OnDelete) && strings.ToUpper(fk.OnDelete) != "NO ACTION" {
+		line += " ON DELETE " + strings.ToUpper(fk.OnDelete)
+	}
+	if validFKAction(fk.OnUpdate) && strings.ToUpper(fk.OnUpdate) != "NO ACTION" {
+		line += " ON UPDATE " + strings.ToUpper(fk.OnUpdate)
+	}
+	return line
+}
+
 // CreateTable renders the full script for a table described by the given
 // catalog rows: the CREATE TABLE statement (columns plus primary-key
 // constraints), one CREATE INDEX per secondary index, and one ALTER TABLE per
