@@ -387,8 +387,12 @@ func (d *OracleDriver) BrowseRows(ctx context.Context, schema, table string, req
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
 	cq, ca := d.dialect.BuildCountQuery(s, table, req)
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
-		out.Total = uint64(cres.Rows[0][0].I)
-		out.TotalFound = true
+		// Kind-aware: go-ora hands COUNT(*) over as NUMBER text — reading .I
+		// blind answered 0 for exactly that shape.
+		if total, ok := dbcore.UintFromValue(cres.Rows[0][0]); ok {
+			out.Total = total
+			out.TotalFound = true
+		}
 	}
 	return out, nil
 }
@@ -406,7 +410,10 @@ func (d *OracleDriver) BrowseRowsCount(ctx context.Context, schema, table string
 	if len(res.Rows) == 0 {
 		return 0, nil
 	}
-	return uint64(res.Rows[0][0].I), nil
+	if n, ok := dbcore.UintFromValue(res.Rows[0][0]); ok {
+		return n, nil
+	}
+	return 0, fmt.Errorf("count query returned a non-integer value")
 }
 
 // OracleDialect implements dbcore.Dialect for Oracle 12c and newer.

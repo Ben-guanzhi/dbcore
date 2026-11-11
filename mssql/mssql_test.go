@@ -35,6 +35,9 @@ func TestMSSQLContract(t *testing.T) {
 		CreateTable: func(name string) string {
 			return fmt.Sprintf("CREATE TABLE [%s] (id INT, name NVARCHAR(255))", name)
 		},
+		TimestampDDL: func(table string) []string {
+			return []string{fmt.Sprintf("CREATE TABLE [%s] (id INT, at DATETIME2)", table)}
+		},
 	}
 	h.Run(t)
 }
@@ -163,5 +166,20 @@ func TestBuildRowsQueryNilRequest(t *testing.T) {
 	cq, _ := d.BuildCountQuery("", "t", nil)
 	if cq == "" {
 		t.Fatal("nil request built an empty count query")
+	}
+}
+
+// P1-2 回归：nchar/nvarchar 是 UTF-16，INFORMATION_SCHEMA 的
+// CHARACTER_MAXIMUM_LENGTH 是字节数，类型长度必须除 2；char/varchar/
+// binary/varbinary 保持字节语义，不能除。
+func TestSqlTypeExprUnicodeLengthHalved(t *testing.T) {
+	if !strings.Contains(sqlTypeExpr, "CHARACTER_MAXIMUM_LENGTH / 2") {
+		t.Error("sqlTypeExpr must divide CHARACTER_MAXIMUM_LENGTH by 2 for unicode types")
+	}
+	// nchar/nvarchar 必须落在除 2 的分支，不能留在不除 2 的首个分支。
+	branches := strings.SplitN(sqlTypeExpr, "WHEN", 3)
+	firstBranch := branches[1]
+	if strings.Contains(firstBranch, "N'nchar'") || strings.Contains(firstBranch, "N'nvarchar'") {
+		t.Error("nchar/nvarchar must not sit in the non-halving branch")
 	}
 }

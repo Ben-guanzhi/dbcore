@@ -19,6 +19,20 @@ import (
 	"github.com/dbcore/dbcore/plugindriver"
 )
 
+// waitMarker polls for a marker file the fake plugin writes; a marker is the
+// only cross-process proof that a wire message actually reached the child.
+func waitMarker(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("marker %s never appeared within %s", path, timeout)
+}
+
 // fakePluginSource is a minimal plugin: it declares itself "sqlite" and answers the
 // handful of methods the test calls. Written to disk and built, so the test exercises
 // the same exec path a real plugin takes.
@@ -29,6 +43,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/dbcore/dbcore"
 	"github.com/dbcore/dbcore/plugindriver"
@@ -47,12 +63,19 @@ func main() {
 	out.Flush()
 
 	in := bufio.NewReader(os.Stdin)
+	// The real plugin runtime serves each frame in its own goroutine
+	// (fynequery proto/serve.go): that is what lets a cancel reach the plugin
+	// while a statement is still running. The fake mirrors it, with a writer
+	// mutex so interleaved replies cannot tear a frame.
+	var wmu sync.Mutex
 	for {
 		line, err := in.ReadBytes('\n')
 		if len(line) > 0 {
 			var req plugindriver.Request
 			if json.Unmarshal(line, &req) == nil {
-				reply(out, req)
+				go func(req plugindriver.Request) {
+					reply(out, &wmu, req)
+				}(req)
 			}
 		}
 		if err != nil {
@@ -61,16 +84,25 @@ func main() {
 	}
 }
 
-func reply(out *bufio.Writer, req plugindriver.Request) {
+func reply(out *bufio.Writer, wmu *sync.Mutex, req plugindriver.Request) {
 	send := func(result interface{}, errText, code string) {
 		payload, _ := json.Marshal(result)
 		resp := plugindriver.Response{ID: req.ID, Result: payload, Error: errText, Code: code}
 		frame, _ := json.Marshal(resp)
+		wmu.Lock()
 		fmt.Fprintf(out, "%s\n", frame)
 		out.Flush()
+		wmu.Unlock()
 	}
 
 	switch req.Method {
+	case "cancel", plugindriver.MethodConnCancel:
+		// The host's abandon notification. Record it and let the hung
+		// statement observe the marker.
+		if p := os.Getenv("FAKE_CANCEL_MARKER"); p != "" {
+			_ = os.WriteFile(p, []byte("ok"), 0o644)
+		}
+		send(nil, "", "")
 	case plugindriver.MethodPing:
 		send("pong", "", "")
 	case plugindriver.MethodClose:
@@ -81,23 +113,14 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 		}
 		send(nil, "", "")
 		os.Exit(0)
+	case "hang":
+		// The abandon-notify test's subject as a raw method: never answers on
+		// its own. When a cancel arrives the marker file records it and this
+		// hung call is failed — the wire shape a real plugin's Cancel
+		// produces by cancelling the statement's context.
+		hangUntilCancelled(send)
 	case plugindriver.MethodListSchemas:
 		send([]string{"main"}, "", "")
-	case plugindriver.MethodListTables:
-		send([]plugindriver.TablePayload{{Schema: "main", Name: "parts", Type: "table"}}, "", "")
-	case plugindriver.MethodListColumns:
-		def := "42"
-		send([]plugindriver.ColumnPayload{
-			{Name: "id", Type: "INTEGER", IsPrimaryKey: true},
-			{Name: "name", Type: "TEXT", Nullable: true},
-			{Name: "qty", Type: "INTEGER", Default: &def},
-		}, "", "")
-	case plugindriver.MethodListIndexes:
-		send([]dbcore.IndexInfo{{Name: "idx_parts_name", Kind: "index", Columns: []string{"name"}}}, "", "")
-	case plugindriver.MethodListForeign:
-		send([]dbcore.ForeignKeyInfo{}, "", "")
-	case plugindriver.MethodCreateTableDB:
-		send("CREATE TABLE parts (id INTEGER PRIMARY KEY)", "", "")
 	case plugindriver.MethodExecute:
 		// Echo the argument kinds back so the test can prove cells survived.
 		var args struct {
@@ -105,6 +128,12 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 			Args []plugindriver.CellPayload ` + "`json:\"args\"`" + `
 		}
 		json.Unmarshal(req.Params, &args)
+		if args.SQL == "SELECT slow" {
+			// The single-shot abandon test: a statement that only ends when
+			// the host's cancel notification arrives.
+			hangUntilCancelled(send)
+			return
+		}
 		if len(args.Args) > 0 && args.Args[0].Kind == "text" && args.Args[0].Text == "unsupported" {
 			send(nil, "the plugin cannot do that", dbcore.ErrCodeNotSupported)
 			return
@@ -127,6 +156,21 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 			}},
 			AffectedRows: 1,
 		}, "", "")
+	case plugindriver.MethodListTables:
+		send([]plugindriver.TablePayload{{Schema: "main", Name: "parts", Type: "table"}}, "", "")
+	case plugindriver.MethodListColumns:
+		def := "42"
+		send([]plugindriver.ColumnPayload{
+			{Name: "id", Type: "INTEGER", IsPrimaryKey: true},
+			{Name: "name", Type: "TEXT", Nullable: true},
+			{Name: "qty", Type: "INTEGER", Default: &def},
+		}, "", "")
+	case plugindriver.MethodListIndexes:
+		send([]dbcore.IndexInfo{{Name: "idx_parts_name", Kind: "index", Columns: []string{"name"}}}, "", "")
+	case plugindriver.MethodListForeign:
+		send([]dbcore.ForeignKeyInfo{}, "", "")
+	case plugindriver.MethodCreateTableDB:
+		send("CREATE TABLE parts (id INTEGER PRIMARY KEY)", "", "")
 	case plugindriver.MethodBrowseRows:
 		send(plugindriver.BrowseResult{
 			Columns: []plugindriver.ColumnPayload{{Name: "id", Type: "INTEGER"}},
@@ -159,6 +203,27 @@ func reply(out *bufio.Writer, req plugindriver.Request) {
 	default:
 		send(nil, "unknown method "+req.Method, dbcore.ErrCodeNotSupported)
 	}
+}
+
+// hangUntilCancelled simulates a statement that only the host's cancel can
+// stop: it writes the hang marker, waits for the cancel marker, then fails the
+// call with the plugin's cancellation text.
+func hangUntilCancelled(send func(result interface{}, errText, code string)) {
+	if p := os.Getenv("FAKE_HANG_MARKER"); p != "" {
+		_ = os.WriteFile(p, []byte("ok"), 0o644)
+	}
+	cancelMarker := os.Getenv("FAKE_CANCEL_MARKER")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if cancelMarker != "" {
+			if _, err := os.Stat(cancelMarker); err == nil {
+				send(nil, "statement cancelled", "")
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	send(nil, "statement cancelled", "") // timed out waiting; still ends the hang
 }
 `
 
@@ -540,4 +605,71 @@ func TestCloseAsksPolitelyFirst(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("the plugin never received the polite close request")
+}
+
+// A host that gives up on an in-flight call (context cancelled) must tell the
+// plugin, or the statement runs to completion holding the connection. The
+// fake plugin's "hang" method answers only after it sees a cancel; the marker
+// file proves the host's abandon notification actually arrived.
+func TestAbandonedCallNotifiesPlugin(t *testing.T) {
+	binary := buildFakePlugin(t)
+	hangMarker := filepath.Join(t.TempDir(), "hang-started")
+	cancelMarker := filepath.Join(t.TempDir(), "cancel-received")
+	t.Setenv("FAKE_HANG_MARKER", hangMarker)
+	t.Setenv("FAKE_CANCEL_MARKER", cancelMarker)
+
+	drv, err := plugindriver.Start(context.Background(), binary, nil)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer drv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// Give the request time to reach the plugin before the abandon.
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+	_, err = drv.Execute(ctx, "SELECT slow")
+	if err == nil {
+		t.Fatal("the abandoned call must fail with the context error")
+	}
+	if ctx.Err() == nil {
+		t.Fatalf("err = %v, want the context's own error", err)
+	}
+
+	// The plugin recorded the cancel: the notification crossed the wire.
+	waitMarker(t, hangMarker, 5*time.Second)
+	waitMarker(t, cancelMarker, 5*time.Second)
+}
+
+// The streaming path notifies the same way: a consumer that stops reading
+// (page closed, timeout) must not leave the plugin walking its cursor.
+func TestAbandonedStreamNotifiesPlugin(t *testing.T) {
+	binary := buildFakePlugin(t)
+	hangMarker := filepath.Join(t.TempDir(), "hang-started")
+	cancelMarker := filepath.Join(t.TempDir(), "cancel-received")
+	t.Setenv("FAKE_HANG_MARKER", hangMarker)
+	t.Setenv("FAKE_CANCEL_MARKER", cancelMarker)
+
+	conn, err := plugindriver.StartConn(context.Background(), binary, nil)
+	if err != nil {
+		t.Fatalf("start conn: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+	err = conn.CallStream(ctx, "hang", nil, func(plugindriver.StreamFrame) (bool, error) {
+		return true, nil
+	}, nil)
+	if err == nil {
+		t.Fatal("the abandoned stream must fail with the context error")
+	}
+
+	waitMarker(t, hangMarker, 5*time.Second)
+	waitMarker(t, cancelMarker, 5*time.Second)
 }

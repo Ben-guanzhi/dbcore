@@ -134,6 +134,11 @@ func (d *Driver) CallStream(
 				return nil
 			}
 		case <-ctx.Done():
+			// The consumer stopped reading (cancel, timeout, page closed), but
+			// the plugin is still walking its cursor: tell it, exactly as the
+			// single-shot call() does, so the plugin-side statement aborts
+			// instead of streaming into an abandoned pipe.
+			d.abandonNotify(method, raw)
 			return ctx.Err()
 		}
 	}

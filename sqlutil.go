@@ -21,6 +21,35 @@ func RunQuery(ctx context.Context, exec SQLTx, query string, args []Value) (*Que
 	return rowsToResult(rows)
 }
 
+// DriverMaxRows is the materialization bound shared by every consumer that
+// drains a cursor into memory: reading stops at this many rows and the result
+// is marked Truncated. sqltui's AdHocRowLimit used to slice the tail off AFTER
+// the kernel had allocated a row for every row in the table — the cap hid the
+// rows from the UI without bounding the memory.
+const DriverMaxRows = 10000
+
+// RunQueryBounded is RunQuery with a materialization bound: reading stops at
+// maxRows (<=0 means DriverMaxRows) and Truncated/TotalRows report the cut.
+// A caller whose own cap is smaller passes it here instead of trimming after
+// the fact.
+func RunQueryBounded(ctx context.Context, exec SQLTx, query string, args []Value, maxRows int) (*QueryResult, error) {
+	anyArgs := make([]any, len(args))
+	for i, a := range args {
+		anyArgs[i] = nativeFromValue(a)
+	}
+	rows, err := exec.QueryContext(ctx, query, anyArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return rowsToResultBounded(rows, maxRows)
+}
+
+// rowsToResult reads column metadata and all rows into a QueryResult.
+func rowsToResult(rows *sql.Rows) (*QueryResult, error) {
+	return rowsToResultBounded(rows, 0)
+}
+
 // RunExec executes a DML statement (INSERT/UPDATE/DELETE) and returns affected rows
 // and last insert id.
 func RunExec(ctx context.Context, exec SQLTx, query string, args []Value) (affected, lastID int64, err error) {
@@ -37,8 +66,12 @@ func RunExec(ctx context.Context, exec SQLTx, query string, args []Value) (affec
 	return affected, lastID, nil
 }
 
-// rowsToResult reads column metadata and all rows into a QueryResult.
-func rowsToResult(rows *sql.Rows) (*QueryResult, error) {
+// rowsToResultBounded reads column metadata and up to maxRows rows into a
+// QueryResult. maxRows <= 0 means DriverMaxRows.
+func rowsToResultBounded(rows *sql.Rows, maxRows int) (*QueryResult, error) {
+	if maxRows <= 0 {
+		maxRows = DriverMaxRows
+	}
 	colNames, err := rows.Columns()
 	if err != nil {
 		return nil, err
@@ -62,6 +95,12 @@ func rowsToResult(rows *sql.Rows) (*QueryResult, error) {
 	DisambiguateColumnNames(res.Columns)
 
 	for rows.Next() {
+		if len(res.Rows) >= maxRows {
+			total := len(res.Rows)
+			res.Truncated = true
+			res.TotalRows = &total
+			break
+		}
 		holders := make([]any, len(colNames))
 		scan := make([]any, len(colNames))
 		for i := range holders {
@@ -209,16 +248,26 @@ func isIdentChar(c byte) bool {
 		(c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
+// keysetApplicable reports whether the request's After cursor can drive a
+// keyset predicate. Keyset continuation requires exactly one sort key and
+// exactly one cursor value: the predicate is `sort_col > after_val`, which
+// has no well-defined semantics for multi-column sorts or multi-value cursors.
+// Both AppendKeyset and AppendSortLimit consult this so the two stay in sync.
+func keysetApplicable(req *TableRowsRequest) bool {
+	return len(req.After) == 1 && len(req.Sort) == 1
+}
+
 // AppendKeyset appends the keyset continuation predicate (single sort key:
 // k > v with a dialect placeholder) and returns the bound args. Multi-key
-// sorts degrade to OFFSET silently-but-safely: the page is still correct,
+// sorts or multi-value cursors degrade to OFFSET-based pagination (AppendSortLimit
+// uses req.Page when keysetApplicable is false): the page is still correct,
 // just not seek-fast. existingArgs is the number of parameters the statement
 // already carries (the filter values): the continuation binds at the NEXT
 // position. Passing it is not bookkeeping pedantry — positional dialects
 // ($1… in PostgreSQL) mis-type a reused number ("integer > text" on a real
 // instance), while the "?" dialects hide the bug entirely.
 func AppendKeyset(b *strings.Builder, d Dialect, req *TableRowsRequest, existingArgs int) []Value {
-	if len(req.After) == 0 || len(req.Sort) != 1 || len(req.After) != 1 {
+	if !keysetApplicable(req) {
 		return nil
 	}
 	if existingArgs > 0 {
@@ -252,7 +301,10 @@ func AppendSortLimit(b *strings.Builder, d Dialect, req *TableRowsRequest) {
 		}
 	}
 	limit, offset := req.PageSize, 0
-	if req.Page > 1 && len(req.After) == 0 {
+	// P3-1：keyset 不可用时（多键排序/多值 cursor）必须回退 OFFSET，否则
+	// 既无 keyset 谓词又无 OFFSET——查询从头返回，静默重复第一页。
+	// 可用 keyset 时抑制 OFFSET（seek 模式不需要偏移）。
+	if req.Page > 1 && !keysetApplicable(req) {
 		offset = (req.Page - 1) * req.PageSize
 	}
 	if clause := d.LimitOffset(limit, offset); clause != "" {

@@ -26,6 +26,7 @@ func NamePredicate(dbType, column, exact string, insensitive bool) string {
 
 // DatabasesQuery returns the catalog statement that lists every database.
 func DatabasesQuery(dbType string) (string, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case MySQL:
 		return "SHOW DATABASES", nil
@@ -47,6 +48,7 @@ func DatabasesQuery(dbType string) (string, error) {
 // 系统内置对象按精确名单排除：db_ 前缀的 9 个固定数据库角色逐个点名，而不是
 // NOT LIKE 'db[_]%'——否则 db_admin 这类以 db_ 开头的用户 schema 会被误藏。
 func SchemasQuery(dbType, database string) (string, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case SQLServer:
 		name, err := QuoteIdent(dbType, database)
@@ -72,6 +74,7 @@ func SchemasQuery(dbType, database string) (string, error) {
 
 // TablesQuery returns the catalog statement that lists tables and views.
 func TablesQuery(dbType, database, schema, exact string, insensitive bool) (string, []interface{}, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case MySQL:
 		query := `SELECT TABLE_NAME, TABLE_TYPE, TABLE_COMMENT FROM information_schema.TABLES
@@ -136,6 +139,7 @@ func TablesQuery(dbType, database, schema, exact string, insensitive bool) (stri
 
 // ColumnsQuery returns the catalog statement that lists a table's columns.
 func ColumnsQuery(dbType, database, schema, table string) (string, []interface{}, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case MySQL:
 		query := `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT,
@@ -228,6 +232,7 @@ func ColumnsQuery(dbType, database, schema, table string) (string, []interface{}
 // NON_UNIQUE, and handing that through would report a plain index as a unique
 // one.
 func IndexesQuery(dbType, database, schema, table string) (string, []interface{}, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case MySQL:
 		// STATISTICS has no is-primary column either: MySQL marks the key by
@@ -290,6 +295,7 @@ func IndexesQuery(dbType, database, schema, table string) (string, []interface{}
 
 // ForeignKeysQuery returns the catalog statement that lists a table's foreign keys.
 func ForeignKeysQuery(dbType, database, schema, table string) (string, []interface{}, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case MySQL:
 		query := `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA,
@@ -363,6 +369,7 @@ func ForeignKeysQuery(dbType, database, schema, table string) (string, []interfa
 // FullColumnTypesQuery returns the catalog statement that reads name -> full
 // type (with length/precision) for engines that report bare type names.
 func FullColumnTypesQuery(dbType, database, schema, table string) (string, []interface{}, error) {
+	dbType = Normalize(dbType)
 	switch dbType {
 	case SQLServer:
 		quoted, err := QuoteIdent(dbType, database)
@@ -371,10 +378,10 @@ func FullColumnTypesQuery(dbType, database, schema, table string) (string, []int
 		}
 		query := fmt.Sprintf(`SELECT COLUMN_NAME,
 			DATA_TYPE + CASE
-				WHEN DATA_TYPE IN ('varchar', 'char', 'varbinary', 'binary', 'nchar') THEN
+				WHEN DATA_TYPE IN ('varchar', 'char', 'varbinary', 'binary') THEN
 					CASE WHEN CHARACTER_MAXIMUM_LENGTH = -1 THEN '(max)'
 						ELSE '(' + CAST(CHARACTER_MAXIMUM_LENGTH AS varchar(20)) + ')' END
-				WHEN DATA_TYPE = 'nvarchar' THEN
+				WHEN DATA_TYPE IN ('nvarchar', 'nchar') THEN
 					CASE WHEN CHARACTER_MAXIMUM_LENGTH = -1 THEN '(max)'
 						ELSE '(' + CAST(CHARACTER_MAXIMUM_LENGTH / 2 AS varchar(20)) + ')' END
 				WHEN DATA_TYPE IN ('decimal', 'numeric') THEN
@@ -389,7 +396,8 @@ func FullColumnTypesQuery(dbType, database, schema, table string) (string, []int
 	case Oracle:
 		return fmt.Sprintf(`SELECT COLUMN_NAME,
 			DATA_TYPE || CASE
-				WHEN DATA_TYPE IN ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') THEN '(' || DATA_LENGTH || ')'
+				WHEN DATA_TYPE IN ('VARCHAR2', 'CHAR') THEN '(' || DATA_LENGTH || ')'
+				WHEN DATA_TYPE IN ('NVARCHAR2', 'NCHAR') THEN '(' || CHAR_LENGTH || ')'
 				WHEN DATA_TYPE = 'NUMBER' AND DATA_PRECISION IS NOT NULL THEN
 					'(' || DATA_PRECISION || CASE WHEN DATA_SCALE > 0 THEN ', ' || DATA_SCALE ELSE '' END || ')'
 				ELSE '' END
@@ -403,6 +411,7 @@ func FullColumnTypesQuery(dbType, database, schema, table string) (string, []int
 // PreviewPageQuery returns the catalog statement that reads one page of a table.
 // where and orderBy are pre-built clauses (without leading WHERE/ORDER BY keywords).
 func PreviewPageQuery(dbType, database, schema, table, where, orderBy string, limit, offset int) (string, []interface{}, error) {
+	dbType = Normalize(dbType)
 	name, err := QualifiedTable(dbType, database, schema, table)
 	if err != nil {
 		return "", nil, err

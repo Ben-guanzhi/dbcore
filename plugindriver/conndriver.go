@@ -378,11 +378,30 @@ func (c *Conn) BrowseRows(ctx context.Context, schema, table string, req *dbcore
 	if req != nil {
 		limit = req.PageSize
 	}
-	raw, err := c.driver.callConn(ctx, connMethodBrowse, ConnBrowseParams{
+	// P1-1 回归：Filter/Sort/After 必须翻译进 ConnBrowseParams 下发，
+	// 不能静默丢弃。旧写法只传 Limit，调用方构造的过滤条件被忽略，
+	// 插件返回未过滤的行——用户看到自己没要求的数据。
+	params := ConnBrowseParams{
 		ConnID: c.connID,
 		Table:  table,
 		Limit:  limit,
-	})
+	}
+	if req != nil {
+		for _, key := range req.Sort {
+			params.Sort = append(params.Sort, SortArg{Column: key.Column, Desc: key.Desc})
+		}
+		for _, filter := range req.Filter {
+			params.Filter = append(params.Filter, FilterArg{
+				Column: filter.Column,
+				Op:     string(filter.Op),
+				Value:  EncodeValue(filter.Value),
+			})
+		}
+		for _, v := range req.After {
+			params.After = append(params.After, EncodeValue(v))
+		}
+	}
+	raw, err := c.driver.callConn(ctx, connMethodBrowse, params)
 	if err != nil {
 		return nil, err
 	}

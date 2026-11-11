@@ -31,6 +31,9 @@ func TestOracleContract(t *testing.T) {
 		CreateTable: func(name string) string {
 			return fmt.Sprintf(`CREATE TABLE "%s" (id NUMBER, name VARCHAR2(255))`, name)
 		},
+		TimestampDDL: func(table string) []string {
+			return []string{fmt.Sprintf(`CREATE TABLE "%s" (id NUMBER, at TIMESTAMP)`, table)}
+		},
 		// DROP TABLE IF EXISTS does not exist before 23c.
 		DropTable: func(name string) string {
 			return fmt.Sprintf(`BEGIN EXECUTE IMMEDIATE 'DROP TABLE "%s"'; EXCEPTION WHEN OTHERS THEN NULL; END;`, name)

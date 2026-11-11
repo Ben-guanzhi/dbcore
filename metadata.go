@@ -215,7 +215,7 @@ type TableRowsRequest struct {
 	Filter   []FilterExpr
 	// After turns paging into keyset continuation: values aligned with Sort.
 	// Exactly one sort key is supported (the guarded deep-paging case);
-	// anything else degrades to OFFSET. When set, Page/offset are ignored.
+	// anything else falls back to OFFSET-based pagination via req.Page.
 	After []Value
 }
 
@@ -236,6 +236,13 @@ type QueryResult struct {
 	Rows         [][]Value
 	AffectedRows int64
 	LastInsertID int64
+	// Truncated reports that reading stopped before the result was exhausted
+	// (the driver's materialization cap hit). TotalRows then records how many
+	// rows had been produced at the cut — a bounded reader cannot know the
+	// real total without a second count query, and inventing one would turn a
+	// cheap read into a full scan.
+	Truncated bool
+	TotalRows *int
 }
 
 // Redis/KV types (contract §4.6). Kept minimal but present so KVDriver is complete.

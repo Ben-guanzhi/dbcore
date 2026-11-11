@@ -155,7 +155,7 @@ func Where(dbType string, keys []Key, cursor []string, backward bool) (string, [
 
 // cursorParam spells the nth parameter (counting from one) the way dbType wants.
 func cursorParam(dbType string, position int) string {
-	if dbType == "postgresql" {
+	if sqltext.Normalize(dbType) == sqltext.Postgres {
 		return "$" + strconv.Itoa(position)
 	}
 	return "?"
@@ -197,7 +197,15 @@ func PageCursors(rows [][]interface{}, keys []Key, columns []string) (start, end
 	}
 	nameToPos := make(map[string]int, len(columns))
 	for j, name := range columns {
-		nameToPos[strings.ToLower(name)] = j
+		folded := strings.ToLower(name)
+		if _, exists := nameToPos[folded]; exists {
+			// A folded-name collision: two columns whose names fold to the
+			// same form (e.g. `id` and `ID` on a quoted-identifier engine)
+			// would share one position, so the cursor picks the wrong column.
+			// Fall back to OFFSET like a missing key column does.
+			return nil, nil
+		}
+		nameToPos[folded] = j
 	}
 	positions := make([]int, len(keys))
 	for i, key := range keys {

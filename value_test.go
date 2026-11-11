@@ -1,6 +1,7 @@
 package dbcore
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -82,6 +83,62 @@ func TestValueOf(t *testing.T) {
 			string(got.B) != string(c.want.B) {
 			t.Errorf("ValueOf(%#v) = %+v, want %+v", c.in, got, c.want)
 		}
+	}
+}
+
+// Drivers scan BIGINT UNSIGNED above the signed range as uint64: int64 cannot
+// hold it and a float64 would round it, so the exact digit text IS the value —
+// ValDecimal, the same rule the Oracle NUMBER decoder applies. Within the
+// signed range it keeps the integer kind callers already handle.
+func TestNativeToValueUint64AboveSignedRange(t *testing.T) {
+	inRange := ValueOf(uint64(42))
+	if inRange.Kind != ValInt || inRange.I != 42 {
+		t.Fatalf("uint64(42) = %+v, want ValInt 42", inRange)
+	}
+	above := ValueOf(uint64(math.MaxInt64) + 1)
+	if above.Kind != ValDecimal || above.S != "9223372036854775808" {
+		t.Fatalf("uint64 above MaxInt64 = %+v, want ValDecimal 9223372036854775808", above)
+	}
+	max := ValueOf(^uint64(0))
+	if max.Kind != ValDecimal || max.S != "18446744073709551615" {
+		t.Fatalf("MaxUint64 = %+v, want ValDecimal 18446744073709551615", max)
+	}
+	// The digits round-trip exactly through the decimal accessors.
+	if n, ok := UintFromValue(max); !ok || n != ^uint64(0) {
+		t.Errorf("UintFromValue(MaxUint64) = %d, %v", n, ok)
+	}
+}
+
+// COUNT(*) reaches consumers through different kinds per driver/protocol.
+// The old `uint64(cell.I)` read answered 0 for every non-integer kind; the
+// Kind-aware extractor must accept them all and refuse what it cannot hold.
+func TestUintFromValueCountShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		v    Value
+		want uint64
+		ok   bool
+	}{
+		{"int", Value{Kind: ValInt, I: 42}, 42, true},
+		{"zero", Value{Kind: ValInt, I: 0}, 0, true},
+		{"negative", Value{Kind: ValInt, I: -1}, 0, false},
+		{"decimal", Value{Kind: ValDecimal, S: "12345678901234567890"}, 12345678901234567890, true},
+		{"text", Value{Kind: ValText, S: "7"}, 7, true},
+		{"text padded", Value{Kind: ValText, S: " 42 "}, 42, true},
+		{"blob bytes", Value{Kind: ValBlob, B: []byte("256")}, 256, true},
+		{"float refused", Value{Kind: ValFloat, F: 42}, 0, false},
+		{"garbage text", Value{Kind: ValText, S: "12x"}, 0, false},
+		{"null", Value{Kind: ValNull}, 0, false},
+	}
+	for _, c := range cases {
+		got, ok := UintFromValue(c.v)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("%s: UintFromValue(%+v) = %d, %v, want %d, %v", c.name, c.v, got, ok, c.want, c.ok)
+		}
+	}
+	maxI64, ok := UintFromValue(Value{Kind: ValInt, I: math.MaxInt64})
+	if !ok || maxI64 != uint64(math.MaxInt64) {
+		t.Errorf("Int64 max = %d, %v, want %d", maxI64, ok, uint64(math.MaxInt64))
 	}
 }
 

@@ -44,6 +44,10 @@ type Spec struct {
 	CreateTable func(name string) string
 	DropTable   func(name string) string
 	TableName   func(name string) string
+	// TimestampDDL, when non-nil, is the DDL for the value-kind time round
+	// trip (see Harness.TimestampDDL). Nil skips that subtest rather than
+	// running it against a column type the engine cannot store.
+	TimestampDDL func(table string) []string
 }
 
 // Run executes the full contract against spec.
@@ -73,14 +77,15 @@ func Run(t *testing.T, spec Spec) {
 		tableName = func(name string) string { return FoldName(spec.Kind, name) }
 	}
 	Harness{
-		Make:        spec.Open,
-		Schema:      schema,
-		Placeholder: placeholder,
-		CreateTable: create,
-		DropTable:   drop,
-		TableName:   tableName,
-		ColumnFold:  func(s string) string { return FoldName(spec.Kind, s) },
-		Kind:        spec.Kind,
+		Make:          spec.Open,
+		Schema:        schema,
+		Placeholder:   placeholder,
+		CreateTable:   create,
+		DropTable:     drop,
+		TableName:     tableName,
+		ColumnFold:    func(s string) string { return FoldName(spec.Kind, s) },
+		Kind:          spec.Kind,
+		TimestampDDL:  spec.TimestampDDL,
 	}.Run(t)
 }
 

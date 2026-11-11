@@ -2,6 +2,7 @@ package dbcore
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -196,6 +197,15 @@ func nativeToValue(v any) Value {
 		return Value{Kind: ValNull}
 	case int64:
 		return Value{Kind: ValInt, I: x}
+	case uint64:
+		// BIGINT UNSIGNED above the signed range: int64 cannot hold it and a
+		// float64 would round it, so the exact digit text IS the value (the
+		// same rule ValDecimal uses). Within the signed range it keeps the
+		// integer kind callers already handle.
+		if x <= math.MaxInt64 {
+			return Value{Kind: ValInt, I: int64(x)}
+		}
+		return Value{Kind: ValDecimal, S: strconv.FormatUint(x, 10)}
 	case float64:
 		return Value{Kind: ValFloat, F: x}
 	case float32:
@@ -366,4 +376,35 @@ func IntFrom(v Value) (int64, bool) {
 		}
 	}
 	return 0, false
+}
+
+// UintFromValue extracts a non-negative integer from a count-style result cell
+// without assuming its Kind. A COUNT(*) reaches this through different wire
+// shapes per driver/protocol: ValInt from the binary protocol, ValDecimal and
+// ValText digit text from the text protocol and go-ora, ValBlob bytes when a
+// driver delivers the count as unparsed bytes. Reading v.I directly — the
+// old shape — silently answered 0 for every non-integer kind.
+func UintFromValue(v Value) (uint64, bool) {
+	switch v.Kind {
+	case ValInt:
+		if v.I < 0 {
+			return 0, false
+		}
+		return uint64(v.I), true
+	case ValDecimal:
+		return parseUintText(v.S)
+	case ValText:
+		return parseUintText(v.S)
+	case ValBlob:
+		return parseUintText(string(v.B))
+	}
+	return 0, false
+}
+
+func parseUintText(s string) (uint64, bool) {
+	n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

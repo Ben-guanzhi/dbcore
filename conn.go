@@ -148,8 +148,15 @@ type Factory func(ctx context.Context, spec ConnSpec, pool PoolConfig) (Driver, 
 
 var factories = struct {
 	sync.RWMutex
+	// m is the provider table. Exactly one factory per kind is allowed, which
+	// is the registry's half of the paper's "each key has a single provider"
+	// discipline (single-source discipline, §6.6).
 	m map[DatabaseKind]Factory
-}{m: map[DatabaseKind]Factory{}}
+	// ref counts factories currently being opened for a kind - the registry
+	// level analogue of the paper's relied_n(γ). It is what
+	// UnregisterFactory refuses to withdraw while > 0.
+	ref map[DatabaseKind]int
+}{m: map[DatabaseKind]Factory{}, ref: map[DatabaseKind]int{}}
 
 // RegisterFactory installs the Factory for kind. It is meant to be called from
 // an engine package's init; registering the same kind twice panics, matching
@@ -165,6 +172,42 @@ func RegisterFactory(kind DatabaseKind, f Factory) {
 	}
 	factories.m[kind] = f
 }
+
+// UnregisterFactory withdraws the Factory for kind.
+//
+// This is the inverse of RegisterFactory and is what makes the registry
+// withdrawable at all: without it the entry is a permanent init-time side
+// effect (DB-02/PD-06). Withdrawal is refused while a consumer is still
+// acquiring the provider - the registry level expression of the paper's
+// "the provider is removed only once no consumer relies on it"
+// (¬ relied_n(γ), §6.5/§6.6). Drivers already handed out belong to the caller,
+// which must close them before withdrawing; FactoryReliance reports the
+// in-flight acquisitions so callers can wait.
+func UnregisterFactory(kind DatabaseKind) error {
+	factories.Lock()
+	defer factories.Unlock()
+	if _, ok := factories.m[kind]; !ok {
+		return &Error{ErrCodeNotSupported, "unregister: no factory registered for " + string(kind)}
+	}
+	if factories.ref[kind] > 0 {
+		return &Error{ErrCodeProviderInUse, fmt.Sprintf(
+			"unregister: factory for %s is still in use by %d opener(s)", kind, factories.ref[kind])}
+	}
+	delete(factories.m, kind)
+	return nil
+}
+
+// FactoryReliance reports how many Open calls for kind are currently in flight
+// (acquiring, or about to acquire, the provider). It is the registry's
+// relied_n(γ): zero means the kind may be withdrawn safely.
+func FactoryReliance(kind DatabaseKind) int {
+	factories.RLock()
+	defer factories.RUnlock()
+	return factories.ref[kind]
+}
+
+// FactoryInUse is a convenience form of FactoryReliance.
+func FactoryInUse(kind DatabaseKind) bool { return FactoryReliance(kind) > 0 }
 
 // HasFactory reports whether an engine package for kind has been imported.
 func HasFactory(kind DatabaseKind) bool {
@@ -194,13 +237,24 @@ func Open(ctx context.Context, spec ConnSpec, pool PoolConfig) (Driver, error) {
 	if strings.TrimSpace(string(spec.Kind)) == "" {
 		return nil, &Error{ErrCodeNotSupported, "open: empty DatabaseKind"}
 	}
-	factories.RLock()
+	factories.Lock()
 	f, ok := factories.m[spec.Kind]
-	factories.RUnlock()
 	if !ok {
+		factories.Unlock()
 		return nil, &Error{ErrCodeNotSupported, fmt.Sprintf(
 			"open: no factory for %q (import the engine package, e.g. dbcore/%s)", spec.Kind, enginePackage(spec.Kind))}
 	}
+	factories.ref[spec.Kind]++
+	factories.Unlock()
+	// Release the reliance once the factory returns, whether it succeeded or
+	// failed, so a kind can be withdrawn again afterwards.
+	defer func() {
+		factories.Lock()
+		if factories.ref[spec.Kind]--; factories.ref[spec.Kind] <= 0 {
+			delete(factories.ref, spec.Kind)
+		}
+		factories.Unlock()
+	}()
 	d, err := f(ctx, spec, pool)
 	if err != nil {
 		return nil, err

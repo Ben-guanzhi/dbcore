@@ -26,6 +26,9 @@ func TestPostgresContract(t *testing.T) {
 		Schema:      "public",
 		Placeholder: func(idx int) string { return fmt.Sprintf("$%d", idx) },
 		Kind:        dbcore.KindPostgres,
+		TimestampDDL: func(table string) []string {
+			return []string{fmt.Sprintf("CREATE TABLE %s (id INTEGER, at TIMESTAMPTZ)", table)}
+		},
 	}
 	h.Run(t)
 }

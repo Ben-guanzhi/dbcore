@@ -16,7 +16,6 @@ package sqltext
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -43,6 +42,28 @@ func QuoteIdent(dbType, name string) (string, error) {
 		return "", fmt.Errorf("unsupported type: %s", dbType)
 	}
 	return d.QuoteIdent(name)
+}
+
+// QuoteIdentLoose quotes an identifier with the dialect's native delimiters
+// without QuoteIdent's validity guard: empty, overlong and control-carrying
+// names are rejected by QuoteIdent, this renders them anyway.
+//
+// Reach for it only when the name is not the caller's to validate and a
+// syntactically valid identifier must be produced regardless. The usual
+// alternative — falling back to the ANSI double-quote spelling — is not merely
+// invalid on some engines but changes the statement's meaning: MySQL parses
+// `"x"` as a string literal, so `"t".col` is a type error at best and a
+// silent mis-read at worst. For an unknown dialect it returns the ANSI form,
+// matching QuoteIdent's failure shape.
+func QuoteIdentLoose(dbType, name string) string {
+	switch Normalize(dbType) {
+	case MySQL:
+		return quoteIdentLooseMySQL(name)
+	case SQLServer:
+		return quoteIdentLooseSQLServer(name)
+	default: // PostgreSQL, SQLite, Oracle and anything unrecognised
+		return quoteIdentLooseDouble(name)
+	}
 }
 
 // QualifiedName quotes each part and joins them with the engine's qualifier.
@@ -94,30 +115,78 @@ func QuotedLiteral(dbType, value string) string {
 	return d.QuoteLiteral(value)
 }
 
-// ownLimitRe spots SQL that already caps its own rows. A false positive only
-// means the statement runs untouched, which is the safer direction.
-var ownLimitRe = regexp.MustCompile(`(?i)\b(top|limit|offset|fetch|rownum)\b`)
+// skipLeadingTrivia strips whitespace, line/block comments and opening parens
+// from the front of a statement so keyword classification sees the first real
+// token. It mirrors dbcore.skipLeadingTrivia exactly: Oracle's optimizer hints
+// make `/*+ ... */ SELECT` the everyday spelling of a read, and a `(SELECT …)`
+// is a read too. Without the strip the row cap classifies those statements as
+// "not a read" and silently no-ops, while IsReadQuery (which does strip) routes
+// them into the capped branch — the two functions disagree on the same input.
+func skipLeadingTrivia(s string) string {
+	for {
+		s = strings.TrimLeft(s, " \t\r\n;")
+		switch {
+		case strings.HasPrefix(s, "--"):
+			if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+				s = s[nl+1:]
+				continue
+			}
+			return ""
+		case strings.HasPrefix(s, "/*"):
+			if end := strings.Index(s, "*/"); end >= 0 {
+				s = s[end+2:]
+				continue
+			}
+			return ""
+		case strings.HasPrefix(s, "("):
+			s = s[1:]
+		default:
+			return s
+		}
+	}
+}
 
-// queryOwnLimit reports whether the statement already caps its own rows. The
-// regex runs on the statement with string literals, quoted identifiers,
-// brackets and comments removed first: a column named `limit` or a literal
-// like 'top n' must not suppress the row cap and turn a bounded page into a
-// full-table read.
-func queryOwnLimit(query string) bool {
-	var sb strings.Builder
-	i := 0
-	for i < len(query) {
+// stripLeadingSeparators drops only the statement separators and whitespace at
+// the front of a statement, keeping comments and parentheses. The appending
+// dialects (LIMIT) can leave a leading `;` in place, but a wrapping dialect
+// (ROWNUM, TOP ... FROM (...)) puts the text inside parentheses, where a
+// stray separator is a syntax error: `SELECT * FROM (;SELECT ...)` never
+// parses. Comments are not separators and must survive the wrap.
+func stripLeadingSeparators(s string) string {
+	return strings.TrimLeft(s, " \t\r\n;")
+}
+
+// ownLimitKind reports whether the outermost statement carries a row limit of
+// its own, and which keyword spells it ("LIMIT", "TOP", "FETCH" or "ROWNUM");
+// it returns "" when the statement carries none.
+//
+// The scan skips string literals, quoted identifiers, bracketed identifiers and
+// comments, and it only matches at paren depth 0. That is the whole point: a
+// LIMIT buried in a subquery caps the subquery, not the rows the caller sees, so
+// `SELECT * FROM big WHERE id IN (SELECT id FROM small LIMIT 5)` must still get
+// the outer cap. OFFSET is deliberately absent from the keyword set — it does
+// not cap anything, so `SELECT * FROM items OFFSET 10` returns every remaining
+// row and needs the cap.
+//
+// This replaces a whole-statement substring match on (top|limit|offset|fetch|
+// rownum), which matched a LIMIT in a subquery, an OFFSET with no LIMIT, and a
+// column aliased `top`, and skipped the cap in all three cases.
+func ownLimitKind(query string) string {
+	depth := 0
+	i, n := 0, len(query)
+	for i < n {
 		c := query[i]
 		switch {
 		case c == '\'' || c == '"' || c == '`':
+			q := c
 			i++
-			for i < len(query) {
-				if c == '\'' && query[i] == '\\' && i+1 < len(query) {
+			for i < n {
+				if q == '\'' && query[i] == '\\' && i+1 < n {
 					i += 2
 					continue
 				}
-				if query[i] == c {
-					if i+1 < len(query) && query[i+1] == c {
+				if query[i] == q {
+					if i+1 < n && query[i+1] == q {
 						i += 2
 						continue
 					}
@@ -128,27 +197,72 @@ func queryOwnLimit(query string) bool {
 			}
 		case c == '[':
 			i++
-			for i < len(query) && query[i] != ']' {
+			for i < n && query[i] != ']' {
 				i++
 			}
 			i++
-		case c == '-' && i+1 < len(query) && query[i+1] == '-':
-			for i < len(query) && query[i] != '\n' {
+		case c == '-' && i+1 < n && query[i+1] == '-':
+			for i < n && query[i] != '\n' {
 				i++
 			}
-		case c == '/' && i+1 < len(query) && query[i+1] == '*':
-			end := strings.Index(query[i+2:], "*/")
-			if end < 0 {
-				i = len(query)
+		case c == '/' && i+1 < n && query[i+1] == '*':
+			if end := strings.Index(query[i+2:], "*/"); end < 0 {
+				return "" // unterminated block comment: be conservative
 			} else {
 				i += 2 + end + 2
 			}
+		case c == '(':
+			depth++
+			i++
+		case c == ')':
+			if depth == 0 {
+				return "" // unbalanced: be conservative
+			}
+			depth--
+			i++
+		case depth == 0 && isWordByte(c):
+			j := i
+			for j < n && isWordByte(query[j]) {
+				j++
+			}
+			word := strings.ToUpper(query[i:j])
+			switch word {
+			case "FETCH", "ROWNUM":
+				return word
+			case "LIMIT":
+				// LIMIT must be followed by a count, a parenthesised count or a
+				// bind parameter. A bare "limit" is an identifier (`SELECT *
+				// FROM t AS limit`), and LIMIT ALL caps nothing.
+				if k := skipSpaces(query, j); k < n {
+					switch {
+					case query[k] >= '0' && query[k] <= '9',
+						query[k] == '(', query[k] == '?', query[k] == ':', query[k] == '$':
+						return word
+					}
+				}
+			case "TOP":
+				// T-SQL TOP is followed by "(" or a count. A bare "top" is an
+				// identifier (`SELECT * FROM t AS top`) and caps nothing.
+				if k := skipSpaces(query, j); k < n &&
+					(query[k] == '(' || query[k] >= '0' && query[k] <= '9') {
+					return word
+				}
+			}
+			i = j
 		default:
-			sb.WriteByte(c)
 			i++
 		}
 	}
-	return ownLimitRe.MatchString(sb.String())
+	return ""
+}
+
+// skipSpaces advances past ASCII whitespace; it returns the index of the next
+// non-space byte, or n when the statement ends in whitespace.
+func skipSpaces(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+		i++
+	}
+	return i
 }
 
 // RowLimit caps a plain SELECT — or a WITH ... SELECT CTE — the way GUI
@@ -204,7 +318,9 @@ func TruncateStatement(dbType, quotedTable string) (string, error) {
 // the way). Only statement shape lives here; name validation stays with the
 // caller, which owns the user-facing error text.
 func RenameStatement(dbType, current, next, schema, oldTable, newName string) (string, error) {
-	switch dbType {
+	// Normalize before switching: "postgresql" spelling must reach the
+	// Postgres arm, not the unsupported error below.
+	switch Normalize(dbType) {
 	case MySQL:
 		return fmt.Sprintf("RENAME TABLE %s TO %s", current, next), nil
 	case SQLServer:
@@ -311,7 +427,8 @@ func LikePattern(fragment string) string {
 var numericTypeNames = map[string]bool{
 	"int": true, "integer": true, "int2": true, "int4": true, "int8": true,
 	"tinyint": true, "smallint": true, "mediumint": true, "bigint": true,
-	"serial": true, "bigserial": true, "smallserial": true,
+	"big int": true,
+	"serial":  true, "bigserial": true, "smallserial": true,
 	"decimal": true, "dec": true, "numeric": true, "fixed": true,
 	"float": true, "float4": true, "float8": true, "double": true,
 	"double precision": true, "real": true, "money": true, "smallmoney": true,
@@ -329,25 +446,77 @@ type ColumnType struct {
 	base string
 }
 
+// typeModifiers are the MySQL column-type modifiers that change a numeric
+// type's range or display without changing what it is: `unsigned` widens the
+// positive range, `zerofill` pads to the display width. Both are separate
+// words and both orders occur in practice — `bigint unsigned` from
+// information_schema.COLUMN_TYPE, `UNSIGNED BIGINT` from go-sql-driver's
+// DatabaseTypeName — so the fold must drop them as words rather than stripping
+// only a trailing suffix. Dropping them here (once, in the constructor) is what
+// keeps IsNumeric, IsSeekable and IsInteger from answering differently about the
+// same declared type.
+var typeModifiers = map[string]bool{"unsigned": true, "zerofill": true}
+
 // NewColumnType folds a raw declared type ("BIGINT UNSIGNED", "varchar(255)",
 // "DOUBLE PRECISION") into its canonical base name ("bigint", "varchar",
-// "double precision").
+// "double precision"). Modifier words are dropped in any position, so
+// "unsigned big int", "bigint unsigned" and "UNSIGNED BIGINT" all fold to the
+// same base.
 func NewColumnType(raw string) ColumnType {
 	base := raw
 	if i := strings.IndexByte(base, '('); i >= 0 {
 		base = base[:i]
 	}
 	base = strings.ToLower(strings.TrimSpace(base))
-	return ColumnType{raw: raw, base: base}
+	words := strings.Fields(base)
+	kept := words[:0]
+	for _, w := range words {
+		if typeModifiers[w] {
+			continue
+		}
+		kept = append(kept, w)
+	}
+	return ColumnType{raw: raw, base: strings.Join(kept, " ")}
 }
 
 // Base returns the normalized type name.
 func (t ColumnType) Base() string { return t.base }
 
-// IsNumeric reports whether the column holds numbers. A trailing " unsigned"
-// (MySQL's int family) is stripped before the lookup.
+// IsNumeric reports whether the column holds numbers. Modifier words such as
+// "unsigned" are already dropped by NewColumnType, so the base is the canonical
+// type name and this is a plain set lookup.
 func (t ColumnType) IsNumeric() bool {
-	return numericTypeNames[strings.TrimSuffix(t.base, " unsigned")]
+	return numericTypeNames[t.base]
+}
+
+// TypeIsNumeric answers IsNumeric for a raw declared type without building a
+// ColumnType: the fold this needs (lowercase, drop modifier words) is
+// allocation-free while the declared type is already lowercase and carries no
+// modifier word — which catalog types in practice are. Hot loops that ask the
+// same column's type once per row (a 10 000-row export asks it 10 000 times)
+// call this through a per-column precomputation instead.
+func TypeIsNumeric(raw string) bool {
+	base := raw
+	if i := strings.IndexByte(base, '('); i >= 0 {
+		base = base[:i]
+	}
+	base = strings.ToLower(strings.TrimSpace(base))
+	// A modifier word anywhere in the name changes the fold: drop "unsigned"
+	// and "zerofill" wherever they appear (mirrors NewColumnType). The
+	// fast path — the overwhelmingly common shape, a lowercase type without
+	// modifier words — checks for the words without allocating.
+	if !strings.Contains(base, "unsigned") && !strings.Contains(base, "zerofill") {
+		return numericTypeNames[base]
+	}
+	words := strings.Fields(base)
+	clean := make([]string, 0, len(words))
+	for _, w := range words {
+		if w == "unsigned" || w == "zerofill" {
+			continue
+		}
+		clean = append(clean, w)
+	}
+	return numericTypeNames[strings.Join(clean, " ")]
 }
 
 // dateTypeNames is the closed set of declared column-type names that hold a
@@ -369,12 +538,14 @@ func (t ColumnType) IsDate() bool {
 // seekableIntegerNames is the whole-number half of the seek gate: a keyset
 // cursor binds integers as numbers and text as strings, so the caller needs
 // the split as much as the gate itself. Both halves ask this one set instead
-// of folding the declared type again per client.
+// of folding the declared type again per client. Modifier words (unsigned,
+// zerofill) are already dropped by NewColumnType, so the set holds canonical
+// names only — `unsigned big int` and `bigint unsigned` both fold to `bigint`.
 var seekableIntegerNames = map[string]bool{
 	"int": true, "integer": true, "bigint": true, "smallint": true,
 	"tinyint": true, "mediumint": true, "int2": true, "int4": true,
 	"int8": true, "serial": true, "bigserial": true, "rowid": true,
-	"unsigned big int": true,
+	"big int": true,
 }
 
 // IsSeekable reports whether the type can serve as a keyset cursor: whole
@@ -421,7 +592,11 @@ func (t ColumnType) IsDescriptive() bool {
 // instead of recalling each dialect's identity syntax. `schema` fills the
 // engine's own default namespace.
 func CreateTableTemplate(dbType, schema string) string {
-	switch dbType {
+	// Normalize before switching: callers persist their own spellings
+	// ("postgresql", "mssql", "mariadb" — see Normalize), and a raw-spelling
+	// switch silently fell through to "" for those, rendering an empty
+	// starter DDL instead of the engine's template.
+	switch Normalize(dbType) {
 	case MySQL:
 		// MySQL addresses tables by database, which the session already
 		// carries, so the template names the table bare.

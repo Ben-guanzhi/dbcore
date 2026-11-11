@@ -408,8 +408,12 @@ func (d *PostgresDriver) BrowseRows(ctx context.Context, schema, table string, r
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
 	cq, ca := d.dialect.BuildCountQuery(schema, table, req)
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
-		out.Total = uint64(cres.Rows[0][0].I)
-		out.TotalFound = true
+		// Kind-aware: the count may arrive as int (binary protocol) or digit
+		// text (text protocol) — reading .I blind answered 0 for the latter.
+		if total, ok := dbcore.UintFromValue(cres.Rows[0][0]); ok {
+			out.Total = total
+			out.TotalFound = true
+		}
 	}
 	return out, nil
 }
@@ -427,7 +431,10 @@ func (d *PostgresDriver) BrowseRowsCount(ctx context.Context, schema, table stri
 	if len(res.Rows) == 0 {
 		return 0, nil
 	}
-	return uint64(res.Rows[0][0].I), nil
+	if n, ok := dbcore.UintFromValue(res.Rows[0][0]); ok {
+		return n, nil
+	}
+	return 0, fmt.Errorf("count query returned a non-integer value")
 }
 
 // PostgresDialect implements dbcore.Dialect for PostgreSQL.

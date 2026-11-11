@@ -57,6 +57,61 @@ func TestStringRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStringOverflowUint64Max verifies that a Redis string containing a number
+// above int64::MAX (e.g. uint64 max) is read back with Str intact. The Int
+// convenience field stays 0 because strconv.ParseInt(s, 10, 64) cannot parse
+// it — but Str carries the actual value, so no data is lost. This is the
+// P3-9 "redis overflow" item: the scan found no defect because Str always
+// preserves the original text regardless of whether Int can be parsed.
+func TestStringOverflowUint64Max(t *testing.T) {
+	ctx := context.Background()
+	d := newDriver(t)
+
+	// uint64::MAX = 18446744073709551615 — exceeds int64::MAX by 1.
+	const bigNum = "18446744073709551615"
+	if err := d.SetValue(ctx, "big", dbcore.RedisValue{Type: dbcore.RedisStr, Str: bigNum}); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	v, err := d.GetValue(ctx, "big")
+	if err != nil {
+		t.Fatalf("GetValue: %v", err)
+	}
+	if v.Type != dbcore.RedisStr {
+		t.Fatalf("Type = %q, want RedisStr", v.Type)
+	}
+	if v.Str != bigNum {
+		t.Fatalf("Str = %q, want %q (data loss!)", v.Str, bigNum)
+	}
+	// Int is a convenience field — it stays 0 because the value overflows
+	// int64. The consumer reads Str, not Int, for string-typed values.
+	if v.Int != 0 {
+		t.Errorf("Int = %d, want 0 (value exceeds int64::MAX, Str carries it)", v.Int)
+	}
+}
+
+// TestStringOverflowNegativeInt64Min verifies the negative boundary:
+// int64::MIN-1 = -9223372036854775808 overflows int64::MIN by 1.
+func TestStringOverflowNegativeInt64Min(t *testing.T) {
+	ctx := context.Background()
+	d := newDriver(t)
+
+	const belowMin = "-9223372036854775808" // int64::MIN — actually parses fine
+	if err := d.SetValue(ctx, "min", dbcore.RedisValue{Type: dbcore.RedisStr, Str: belowMin}); err != nil {
+		t.Fatalf("SetValue: %v", err)
+	}
+	v, err := d.GetValue(ctx, "min")
+	if err != nil {
+		t.Fatalf("GetValue: %v", err)
+	}
+	if v.Str != belowMin {
+		t.Fatalf("Str = %q, want %q", v.Str, belowMin)
+	}
+	// int64::MIN parses fine, so Int should be set.
+	if v.Int != -9223372036854775808 {
+		t.Errorf("Int = %d, want %d", v.Int, int64(-9223372036854775808))
+	}
+}
+
 func TestCollectionsRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	d := newDriver(t)
@@ -178,6 +233,77 @@ func TestScanKeysEmptyPatternMeansAll(t *testing.T) {
 	}
 	if len(page.Keys) != 2 {
 		t.Fatalf("ScanKeys keys = %v, want both keys", page.Keys)
+	}
+}
+
+func TestDedupeKeys(t *testing.T) {
+	seen := map[string]bool{}
+	got := dedupeKeys([]string{"a", "b", "a", "c", "b"}, seen)
+	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+		t.Fatalf("dedupeKeys = %v, want [a b c]", got)
+	}
+	if len(seen) != 3 || !seen["a"] || !seen["b"] || !seen["c"] {
+		t.Fatalf("seen = %v, want all three recorded", seen)
+	}
+	// A second call with the same seen must drop every key it already returned.
+	if got := dedupeKeys([]string{"a", "b"}, seen); len(got) != 0 {
+		t.Fatalf("second dedupeKeys = %v, want empty", got)
+	}
+}
+
+// Redis SCAN is allowed to return an element more than once across rounds. The
+// kernel used to append every key it saw, so a page could contain the same key
+// twice; the callers were told to de-duplicate but never did. A page must be a
+// set of distinct keys.
+//
+// miniredis returns the whole keyspace in a single round regardless of the
+// COUNT hint, so it cannot produce the repeated-element case on its own; the
+// dedupe path itself is covered by TestDedupeKeys. This test pins the invariant
+// a consumer relies on (a page is a set) and that the round cap still bounds a
+// scan that never fills.
+func TestScanKeysEnrichedDedupes(t *testing.T) {
+	ctx := context.Background()
+	d := newDriver(t)
+
+	seeded := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		k := fmt.Sprintf("k:%03d", i)
+		seeded[k] = true
+		if err := d.SetValue(ctx, k, dbcore.RedisValue{Type: dbcore.RedisStr, Str: "x"}); err != nil {
+			t.Fatalf("seed %s: %v", k, err)
+		}
+	}
+
+	const want = 50
+	page, err := d.ScanKeysEnriched(ctx, 0, "", want)
+	if err != nil {
+		t.Fatalf("ScanKeysEnriched: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, e := range page.Keys {
+		if seen[e.Key] {
+			t.Fatalf("page contains the key %q twice", e.Key)
+		}
+		seen[e.Key] = true
+		if !seeded[e.Key] {
+			t.Fatalf("page contains the unseeded key %q", e.Key)
+		}
+	}
+	if len(page.Keys) < want {
+		t.Fatalf("page has %d distinct keys, want at least %d", len(page.Keys), want)
+	}
+
+	// A second page taken from the cursor must also be free of repeats.
+	page2, err := d.ScanKeysEnriched(ctx, page.Cursor, "", want)
+	if err != nil {
+		t.Fatalf("ScanKeysEnriched page 2: %v", err)
+	}
+	seen2 := map[string]bool{}
+	for _, e := range page2.Keys {
+		if seen2[e.Key] {
+			t.Fatalf("page 2 contains the key %q twice", e.Key)
+		}
+		seen2[e.Key] = true
 	}
 }
 

@@ -36,6 +36,11 @@ const (
 	ErrCodeNotSupported        = "ERR_NOT_SUPPORTED"
 	ErrCodeTransactionNotFound = "ERR_TRANSACTION_NOT_FOUND"
 	ErrCodeTransactionFailed   = "ERR_TRANSACTION_FAILED"
+	// ErrCodeProviderInUse is returned by UnregisterFactory when a withdrawal
+	// is attempted while a consumer is still acquiring the provider. It is the
+	// registry-level signal for the paper's withdrawal guard
+	// ("the provider is removed only once no consumer relies on it", §6.5/§6.6).
+	ErrCodeProviderInUse = "ERR_PROVIDER_IN_USE"
 )
 
 // Error is a typed error carrying a stable Code for cross-language matching.

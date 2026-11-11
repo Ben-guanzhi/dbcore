@@ -142,9 +142,9 @@ func (d *RedisDriver) KeyType(ctx context.Context, key string) (dbcore.RedisKeyT
 }
 
 // ScanKeysEnriched is the D5 "fill the page" scan: rounds continue until count
-// keys are collected, the cursor returns to 0, or the round cap is reached,
-// and every key carries its TYPE and remaining TTL so a page renders in one
-// call. TTL collapses to seconds when positive; the raw sentinels (-1 no
+// distinct keys are collected, the cursor returns to 0, or the round cap is
+// reached, and every key carries its TYPE and remaining TTL so a page renders
+// in one call. TTL collapses to seconds when positive; the raw sentinels (-1 no
 // expiry, -2 missing) pass through like the bare TTL/PTTL reply would.
 func (d *RedisDriver) ScanKeysEnriched(ctx context.Context, cursor uint64, pattern string, count int) (*dbcore.EnrichedScanPage, error) {
 	if pattern == "" {
@@ -156,25 +156,32 @@ func (d *RedisDriver) ScanKeysEnriched(ctx context.Context, cursor uint64, patte
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	page := &dbcore.EnrichedScanPage{Keys: []dbcore.RedisKeyEntry{}}
+	seen := map[string]bool{}
 	for round := 0; round < ScanMaxRounds; round++ {
 		keys, next, err := d.client.Scan(ctx, cursor, pattern, int64(count)).Result()
 		if err != nil {
 			return nil, err
 		}
-		if len(keys) > 0 {
+		// SCAN is allowed to return an element more than once across rounds.
+		// Dropping the repeats here keeps a page a set of distinct keys, which
+		// is what the consumers assume (kv.go documents that callers "append
+		// with de-duplication", but the kernel is the cheap place to guarantee
+		// it — the callers never did).
+		fresh := dedupeKeys(keys, seen)
+		if len(fresh) > 0 {
 			// TYPE + TTL were one round trip per key: a page of 100 keys paid
 			// 200+ serial RTTs. One pipeline serves the whole batch.
 			pipe := d.client.Pipeline()
-			typeCmds := make([]*goredis.StatusCmd, len(keys))
-			ttlCmds := make([]*goredis.DurationCmd, len(keys))
-			for i, k := range keys {
+			typeCmds := make([]*goredis.StatusCmd, len(fresh))
+			ttlCmds := make([]*goredis.DurationCmd, len(fresh))
+			for i, k := range fresh {
 				typeCmds[i] = pipe.Type(ctx, k)
 				ttlCmds[i] = pipe.TTL(ctx, k)
 			}
 			if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, goredis.Nil) {
 				return nil, err
 			}
-			for i, k := range keys {
+			for i, k := range fresh {
 				typ, err := typeCmds[i].Result()
 				if err != nil {
 					return nil, err
@@ -201,6 +208,21 @@ func (d *RedisDriver) ScanKeysEnriched(ctx context.Context, cursor uint64, patte
 	}
 	page.Cursor = cursor
 	return page, nil
+}
+
+// dedupeKeys returns keys with duplicates removed, recording every key it has
+// already returned in seen. It is the kernel-side guard against SCAN returning
+// an element more than once across rounds.
+func dedupeKeys(keys []string, seen map[string]bool) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
 }
 
 func (d *RedisDriver) GetValue(ctx context.Context, key string) (dbcore.RedisValue, error) {

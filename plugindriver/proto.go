@@ -91,14 +91,17 @@ type SchemaArgs struct {
 
 // BrowseArgs is the payload of browseRows / browseRowsCount. It mirrors
 // dbcore.TableRowsRequest: a plugin renders the statement from these parts, so the
-// host never sends SQL for a browse.
+// host never sends SQL for a browse. After carries the keyset cursor; a plugin
+// that cannot apply it answers ERR_NOT_SUPPORTED rather than returning unfiltered
+// rows (P3-7).
 type BrowseArgs struct {
-	Schema   string      `json:"schema,omitempty"`
-	Table    string      `json:"table"`
-	Page     int         `json:"page,omitempty"`
-	PageSize int         `json:"pageSize,omitempty"`
-	Sort     []SortArg   `json:"sort,omitempty"`
-	Filter   []FilterArg `json:"filter,omitempty"`
+	Schema   string       `json:"schema,omitempty"`
+	Table    string       `json:"table"`
+	Page     int          `json:"page,omitempty"`
+	PageSize int          `json:"pageSize,omitempty"`
+	Sort     []SortArg    `json:"sort,omitempty"`
+	Filter   []FilterArg  `json:"filter,omitempty"`
+	After    []CellPayload `json:"after,omitempty"`
 }
 
 // SortArg is one dbcore.SortKey.

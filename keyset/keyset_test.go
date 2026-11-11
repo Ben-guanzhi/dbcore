@@ -11,6 +11,21 @@ func keys(t *testing.T, cols ...dbcore.ColumnInfo) []Key {
 	return Keys("postgresql", cols, nil)
 }
 
+// P2-3 回归：cursorParam 必须用 sqltext.Normalize 规范化 dbType，
+// 否则 "postgres"/"PostgreSQL" 等别名会错误地返回 "?" 而不是 "$N"。
+func TestCursorParamNormalizesDBType(t *testing.T) {
+	for _, in := range []string{"postgresql", "postgres", " PostgreSQL "} {
+		if got := cursorParam(in, 1); got != "$1" {
+			t.Errorf("cursorParam(%q) = %q, want $1", in, got)
+		}
+	}
+	for _, in := range []string{"mysql", "sqlite", "oracle", "sqlserver"} {
+		if got := cursorParam(in, 3); got != "?" {
+			t.Errorf("cursorParam(%q) = %q, want ?", in, got)
+		}
+	}
+}
+
 func TestKeysOnlySeeksWholeNumbersAndText(t *testing.T) {
 	k := keys(t,
 		dbcore.ColumnInfo{Name: "id", Type: "bigint", IsPrimaryKey: true},

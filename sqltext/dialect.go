@@ -101,6 +101,26 @@ func quoteIdentSQLServer(name string) (string, error) {
 	return "[" + strings.ReplaceAll(name, "]", "]]") + "]", nil
 }
 
+// Loose identifier quoting: the same escaping as above, minus the validity
+// guard (empty / overlong / control-carrying). Callers reach for it when the
+// name is not theirs to validate (a table or column name read out of a
+// catalog) and they still have to emit a syntactically valid identifier. The
+// guard's rationale is "this name would fail at the engine anyway", but the
+// ANSI double-quote fallback a caller would otherwise write is worse than a
+// failure: MySQL parses "x" as a string literal, so `"t".col` silently
+// changes the statement instead of erroring.
+func quoteIdentLooseMySQL(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+func quoteIdentLooseDouble(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func quoteIdentLooseSQLServer(name string) string {
+	return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
+}
+
 // QuoteLiteral helpers
 func quoteLiteralMySQL(value string) string {
 	escaped := strings.ReplaceAll(value, "'", "''")
@@ -123,11 +143,14 @@ func rowLimitLimit(query string, limit int) string {
 		return query
 	}
 	trimmed := strings.TrimRight(strings.TrimSpace(query), ";")
-	upper := strings.ToUpper(trimmed)
+	// Leading trivia is stripped for classification only; the cap is appended
+	// to the statement the user wrote, comments included.
+	lead := skipLeadingTrivia(trimmed)
+	upper := strings.ToUpper(lead)
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return query
 	}
-	if queryOwnLimit(trimmed) {
+	if ownLimitKind(trimmed) != "" {
 		return query
 	}
 	if !strings.HasPrefix(upper, "SELECT") {
@@ -148,11 +171,12 @@ func rowLimitSQLServer(query string, limit int) string {
 		return query
 	}
 	trimmed := strings.TrimRight(strings.TrimSpace(query), ";")
-	upper := strings.ToUpper(trimmed)
+	lead := skipLeadingTrivia(trimmed)
+	upper := strings.ToUpper(lead)
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return query
 	}
-	if queryOwnLimit(trimmed) {
+	if ownLimitKind(trimmed) != "" {
 		return query
 	}
 	if !strings.HasPrefix(upper, "SELECT") {
@@ -162,11 +186,17 @@ func rowLimitSQLServer(query string, limit int) string {
 		// Only read statements can be wrapped; data-modifying CTEs
 		// (WITH … INSERT/UPDATE/DELETE) cannot and stay untouched.
 		if cteOuterIsRead(trimmed) {
-			return fmt.Sprintf("SELECT TOP (%d) * FROM (%s) AS limited", limit, trimmed)
+			return fmt.Sprintf("SELECT TOP (%d) * FROM (%s) AS limited", limit, stripLeadingSeparators(trimmed))
 		}
 		return query
 	}
-	return fmt.Sprintf("SELECT TOP (%d)%s", limit, trimmed[len("SELECT"):])
+	// Insert TOP immediately after the SELECT keyword the trivia scan found,
+	// keeping whatever trivia preceded it. Slicing trimmed[len("SELECT"):]
+	// assumed SELECT sits at offset 0, which corrupts any statement with a
+	// leading comment, hint, parenthesis or semicolon — the very input the
+	// other engines' arms handle (TestRowLimitIgnoresLeadingTrivia).
+	prefix := trimmed[:len(trimmed)-len(lead)]
+	return fmt.Sprintf("%sSELECT TOP (%d)%s", prefix, limit, lead[len("SELECT"):])
 }
 
 // CteOuterIsRead is the exported face of cteOuterIsRead: consumers with
@@ -188,13 +218,18 @@ func cteOuterIsRead(s string) bool {
 		switch {
 		case c == '\'':
 			// String literal: skip to the closing quote (doubled '' is the
-			// T-SQL escaped quote). The previous scan only fired on a leading
-			// backslash, so plain literals were stepped through byte by byte
-			// and their parens moved the depth counter — '(' inside a literal
-			// lifted it and the outer SELECT was never found at depth 0,
-			// silently defeating the TOP wrap.
+			// T-SQL escaped quote, \' is the MySQL backslash escape). The
+			// previous scan only fired on a leading backslash, so plain
+			// literals were stepped through byte by byte and their parens
+			// moved the depth counter — '(' inside a literal lifted it and
+			// the outer SELECT was never found at depth 0, silently
+			// defeating the TOP wrap.
 			i++
 			for i < len(s) {
+				if s[i] == '\\' && i+1 < len(s) {
+					i += 2
+					continue
+				}
 				if s[i] == '\'' {
 					if i+1 < len(s) && s[i+1] == '\'' {
 						i += 2
@@ -205,6 +240,32 @@ func cteOuterIsRead(s string) bool {
 				}
 				i++
 			}
+		case c == '"' || c == '`':
+			// Quoted identifier (PG/Oracle/SQLite double-quote, MySQL
+			// backtick). A DML keyword inside the quotes — WITH "delete"
+			// AS (...) — must not be matched at depth 0, otherwise the
+			// scanner returns false and the row limit is silently
+			// skipped. Same skipping logic as ownLimitKind.
+			q := c
+			i++
+			for i < len(s) {
+				if s[i] == q {
+					if i+1 < len(s) && s[i+1] == q {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case c == '[':
+			// Bracket-quoted identifier (SQL Server [delete]).
+			i++
+			for i < len(s) && s[i] != ']' {
+				i++
+			}
+			i++
 		case c == '-' && i+1 < len(s) && s[i+1] == '-':
 			for i < len(s) && s[i] != '\n' {
 				i++
@@ -260,11 +321,12 @@ func rowLimitOracle(query string, limit int) string {
 		return query
 	}
 	trimmed := strings.TrimRight(strings.TrimSpace(query), ";")
-	upper := strings.ToUpper(trimmed)
+	lead := skipLeadingTrivia(trimmed)
+	upper := strings.ToUpper(lead)
 	if !strings.HasPrefix(upper, "SELECT") && !strings.HasPrefix(upper, "WITH") {
 		return query
 	}
-	if queryOwnLimit(trimmed) {
+	if ownLimitKind(trimmed) != "" {
 		return query
 	}
 	// A WITH statement is wrapped only when its outermost statement is a
@@ -273,7 +335,7 @@ func rowLimitOracle(query string, limit int) string {
 	if !strings.HasPrefix(upper, "SELECT") && !cteOuterIsRead(trimmed) {
 		return query
 	}
-	return fmt.Sprintf("SELECT * FROM (%s) WHERE ROWNUM <= %d", trimmed, limit)
+	return fmt.Sprintf("SELECT * FROM (%s) WHERE ROWNUM <= %d", stripLeadingSeparators(trimmed), limit)
 }
 
 // Truncate helpers

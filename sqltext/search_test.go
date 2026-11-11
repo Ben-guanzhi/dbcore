@@ -75,7 +75,7 @@ func TestSearchDataQueryPerEngine(t *testing.T) {
 		{"mysql", 2, []string{"SELECT * FROM `t` WHERE `a` LIKE ?", "`b` LIKE ?", "LIMIT 50"}, ""},
 		{"sqlite", 2, []string{`SELECT * FROM "t" WHERE "a" LIKE ?`, "LIMIT 50"}, ""},
 		{"postgresql", 2, []string{"ILIKE $1", "ILIKE $2", "LIMIT 50"}, "LIKE ?"},
-		{"sqlserver", 0, []string{"SELECT TOP (50) *", "[a] LIKE N'%x%'", `ESCAPE '\'`}, "LIKE ?"},
+		{"sqlserver", 0, []string{"SELECT TOP (50) *", "[a] LIKE N'%x%'"}, "LIKE ?"},
 		{"oracle", 0, []string{`"a" LIKE '%x%'`, "ROWNUM <= 50"}, "FETCH"},
 	}
 	for _, c := range cases {
@@ -119,8 +119,11 @@ func TestSearchDataQueryEscapesKeyword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(q, `N'%100\%%'`) {
-		t.Errorf("mssql pattern not escaped:\n%s", q)
+	if !strings.Contains(q, `N'%100[%]%'`) {
+		t.Errorf("mssql pattern not escaped to bracket classes:\n%s", q)
+	}
+	if strings.Contains(q, "ESCAPE") {
+		t.Errorf("T-SQL has no ESCAPE clause:\n%s", q)
 	}
 }
 
@@ -182,5 +185,60 @@ func TestSQLiteSearchEscapesLike(t *testing.T) {
 	}
 	if strings.Contains(q, "ESCAPE") {
 		t.Fatalf("mysql data search must rely on the default escape: %s", q)
+	}
+}
+
+// T-SQL's LIKE has no ESCAPE clause and does not treat the backslash as an
+// escape character. The kernel must therefore escape wildcards with bracket
+// character classes and must never emit `ESCAPE '\'` on the SQL Server path —
+// the old form was rejected by the server ("Incorrect syntax near 'ESCAPE'"),
+// which made SQL Server object search and data search return nothing at all.
+func TestMssqlLikePatternUsesBracketClasses(t *testing.T) {
+	cases := map[string]string{
+		"":         "%%",
+		"abc":      "%abc%",
+		"a_b":      "%a[_]b%",
+		"50%":      "%50[%]%",
+		"[x":       "%[[]x%",
+		"a]b":      "%a]b%",
+		`a\b`:      `%a\b%`, // backslash is literal in T-SQL, not an escape
+		"100%_off": "%100[%][_]off%",
+	}
+	for in, want := range cases {
+		if got := mssqlLikePattern(in); got != want {
+			t.Errorf("mssqlLikePattern(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMssqlSearchNeverEmitsEscapeClause(t *testing.T) {
+	q, args, err := SearchObjectsQuery(SQLServer, "app", "cust_%", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("expected inlined literal, got args %v", args)
+	}
+	if strings.Contains(q, "ESCAPE") {
+		t.Errorf("object search emits the invalid ESCAPE clause:\n%s", q)
+	}
+	for _, want := range []string{`N'%cust[_][%]%'`, "TOP (10)"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("object search misses %q:\n%s", want, q)
+		}
+	}
+
+	q, args, err = SearchDataQuery(SQLServer, "[t]", []string{"[c]"}, "cust_%", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("expected inlined literal, got args %v", args)
+	}
+	if strings.Contains(q, "ESCAPE") {
+		t.Errorf("data search emits the invalid ESCAPE clause:\n%s", q)
+	}
+	if !strings.Contains(q, `N'%cust[_][%]%'`) {
+		t.Errorf("data search pattern not bracket-escaped:\n%s", q)
 	}
 }

@@ -46,6 +46,12 @@ type Harness struct {
 	// subtests (indexes/FKs/views/checks/sequences/routines). When empty, the
 	// portable SQLite-shaped fixtures are used and the subtests still run.
 	Kind dbcore.DatabaseKind
+	// TimestampDDL, when non-nil, returns the DDL for a two-column fixture
+	// (id INTEGER, at <engine timestamp type>) used by the value-kind round
+	// trip. Engines disagree about timestamp types and literal syntax, so this
+	// is opt-in: leaving it nil skips that subtest instead of pretending the
+	// engine was covered.
+	TimestampDDL func(table string) []string
 }
 
 // Run executes the contract assertions. It is safe to call from a *testing.T.
@@ -763,6 +769,7 @@ func (h Harness) Run(t *testing.T) {
 	// shared table's other assertions to keep row counts predictable.
 	h.runCatalogDetailContract(t, ctx, drv, name)
 	h.runExtraMetadataContract(t, ctx, drv, name)
+	h.runValueKindContract(t, ctx, drv)
 }
 
 // countRows extracts the first integer cell of a single-row result (COUNT(*)).

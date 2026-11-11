@@ -338,9 +338,17 @@ func (d *MSSQLDriver) BrowseRows(ctx context.Context, schema, table string, req 
 	}
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
 	cq, ca := d.dialect.BuildCountQuery(schema, table, req)
+	// The COUNT is best-effort: a permission failure or a cancelled context
+	// must not hide the rows the caller already holds. TotalFound stays false
+	// so the client can tell "count failed" from "empty table" — it would
+	// otherwise show "0 rows" about a page it is holding.
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
-		out.Total = uint64(cres.Rows[0][0].I)
-		out.TotalFound = true
+		// Kind-aware: the count may arrive as int (binary protocol) or digit
+		// text (text protocol) — reading .I blind answered 0 for the latter.
+		if total, ok := dbcore.UintFromValue(cres.Rows[0][0]); ok {
+			out.Total = total
+			out.TotalFound = true
+		}
 	}
 	return out, nil
 }
@@ -358,7 +366,10 @@ func (d *MSSQLDriver) BrowseRowsCount(ctx context.Context, schema, table string,
 	if len(res.Rows) == 0 {
 		return 0, nil
 	}
-	return uint64(res.Rows[0][0].I), nil
+	if n, ok := dbcore.UintFromValue(res.Rows[0][0]); ok {
+		return n, nil
+	}
+	return 0, fmt.Errorf("count query returned a non-integer value")
 }
 
 // MSSQLDialect implements dbcore.Dialect for SQL Server.
@@ -472,11 +483,16 @@ func (l MSSQLDialect) appendWhere(b *strings.Builder, req *dbcore.TableRowsReque
 }
 
 // sqlTypeExpr renders a full T-SQL type from INFORMATION_SCHEMA.COLUMNS aliased
-// as c, including length/precision that DATA_TYPE alone drops.
+// as c, including length/precision that DATA_TYPE alone drops. nchar/nvarchar
+// store UTF-16, so INFORMATION_SCHEMA reports byte length and the type length
+// is half of it (P1-2).
 const sqlTypeExpr = `CASE
-	WHEN c.DATA_TYPE IN (N'char', N'varchar', N'binary', N'varbinary', N'nchar', N'nvarchar') THEN
+	WHEN c.DATA_TYPE IN (N'char', N'varchar', N'binary', N'varbinary') THEN
 		c.DATA_TYPE + N'(' + CASE WHEN c.CHARACTER_MAXIMUM_LENGTH = -1 THEN N'max'
 			ELSE CAST(c.CHARACTER_MAXIMUM_LENGTH AS nvarchar(10)) END + N')'
+	WHEN c.DATA_TYPE IN (N'nchar', N'nvarchar') THEN
+		c.DATA_TYPE + N'(' + CASE WHEN c.CHARACTER_MAXIMUM_LENGTH = -1 THEN N'max'
+			ELSE CAST(c.CHARACTER_MAXIMUM_LENGTH / 2 AS nvarchar(10)) END + N')'
 	WHEN c.DATA_TYPE IN (N'decimal', N'numeric') THEN
 		c.DATA_TYPE + N'(' + CAST(c.NUMERIC_PRECISION AS nvarchar(10)) + N','
 			+ CAST(c.NUMERIC_SCALE AS nvarchar(10)) + N')'

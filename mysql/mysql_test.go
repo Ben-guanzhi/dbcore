@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -38,6 +39,9 @@ func TestMySQLContract(t *testing.T) {
 		Schema:      schema,
 		Placeholder: func(int) string { return "?" },
 		Kind:        dbcore.KindMySQL,
+		TimestampDDL: func(table string) []string {
+			return []string{fmt.Sprintf("CREATE TABLE %s (id INT, at DATETIME(6))", table)}
+		},
 	}
 	h.Run(t)
 }
@@ -138,6 +142,56 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 				t.Errorf("kind %d missing %q: %s", kind, want, q)
 			}
 		}
+	}
+}
+
+// TestMysqlIndexPart covers the EXPRESSION column parsing in
+// mysqlIndexPart: a functional key part has EXPRESSION text and an empty
+// COLUMN_NAME; a plain column has the reverse. The DESC flag comes from
+// STATISTICS.COLLATION = 'D' (column 8).
+func TestMysqlIndexPart(t *testing.T) {
+	// Functional index part: EXPRESSION column has text, COLUMN_NAME is empty.
+	r := []dbcore.Value{
+		{Kind: dbcore.ValText, S: "idx_lower"},       // r[0] INDEX_NAME
+		{Kind: dbcore.ValInt, I: 0},                  // r[1] NON_UNIQUE
+		{Kind: dbcore.ValText, S: ""},                // r[2] COLUMN_NAME (empty for expression)
+		{Kind: dbcore.ValText, S: "index"},           // r[3] kind
+		{Kind: dbcore.ValInt, I: 0},                  // r[4] primary flag
+		{Kind: dbcore.ValText, S: "BTREE"},           // r[5] INDEX_TYPE
+		{Kind: dbcore.ValText, S: "(LOWER(`name`))"}, // r[6] EXPRESSION
+		{Kind: dbcore.ValInt, I: 0},                  // r[7] DESC flag (COLLATION != 'D')
+	}
+	part := mysqlIndexPart(r)
+	if part.Expression != "(LOWER(`name`))" {
+		t.Errorf("Expression = %q, want %q", part.Expression, "(LOWER(`name`))")
+	}
+	if part.Column != "" {
+		t.Errorf("Column = %q, want empty for expression part", part.Column)
+	}
+	if part.Desc {
+		t.Error("Desc = true, want false for ASC part")
+	}
+
+	// Plain column part: EXPRESSION is empty, COLUMN_NAME has text, DESC = true.
+	r2 := []dbcore.Value{
+		{Kind: dbcore.ValText, S: "idx_col"},
+		{Kind: dbcore.ValInt, I: 1},
+		{Kind: dbcore.ValText, S: "col1"},
+		{Kind: dbcore.ValText, S: "index"},
+		{Kind: dbcore.ValInt, I: 0},
+		{Kind: dbcore.ValText, S: "BTREE"},
+		{Kind: dbcore.ValText, S: ""}, // empty EXPRESSION
+		{Kind: dbcore.ValInt, I: 1},   // DESC flag (COLLATION = 'D')
+	}
+	part2 := mysqlIndexPart(r2)
+	if part2.Column != "col1" {
+		t.Errorf("Column = %q, want %q", part2.Column, "col1")
+	}
+	if part2.Expression != "" {
+		t.Errorf("Expression = %q, want empty for column part", part2.Expression)
+	}
+	if !part2.Desc {
+		t.Error("Desc = false, want true for DESC part")
 	}
 }
 

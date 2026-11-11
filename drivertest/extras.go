@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dbcore/dbcore"
 )
@@ -485,6 +486,61 @@ func (h Harness) foldCol(name string) string {
 
 func containsFold(haystack, needle string) bool {
 	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}
+
+// runValueKindContract asserts the value kinds survive a driver round trip.
+// The plugin protocol had a time cell whose wire spelling no host could decode
+// (§89): the encoders and the decoder lived in different packages and no test
+// tied them together. This contract is the kernel-level counterpart — a driver
+// that hands a timestamp back as text, or loses the instant, fails here.
+//
+// Engines disagree about timestamp support and literal syntax, so the test is
+// opt-in via TimestampDDL: a harness that leaves it empty skips the subtest
+// rather than pretending to cover it.
+func (h Harness) runValueKindContract(t *testing.T, ctx context.Context, drv dbcore.SQLTxDriver) {
+	t.Run("value_kind_time_round_trip", func(t *testing.T) {
+		if h.TimestampDDL == nil {
+			t.Skip("harness declares no timestamp fixture")
+		}
+		// Same generator the main contract uses, so fixtures never collide.
+		table := h.foldName(fmt.Sprintf("dbcore_ts_%d", rand.Int63()))
+		for _, stmt := range h.TimestampDDL(table) {
+			if _, err := drv.Execute(ctx, stmt); err != nil {
+				t.Fatalf("create timestamp fixture: %v", err)
+			}
+		}
+		defer func() {
+			_, _ = drv.Execute(ctx, "DROP TABLE "+quoteBare(h.kind(), table))
+		}()
+
+		// A whole-second instant, in UTC.
+		want := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+		if _, err := drv.Execute(ctx,
+			fmt.Sprintf("INSERT INTO %s(id,at) VALUES (%s,%s)",
+				quoteBare(h.kind(), table), h.Placeholder(1), h.Placeholder(2)),
+			dbcore.Value{Kind: dbcore.ValInt, I: 1},
+			dbcore.Value{Kind: dbcore.ValTime, T: want},
+		); err != nil {
+			t.Fatalf("insert timestamp: %v", err)
+		}
+
+		res, err := drv.Execute(ctx,
+			fmt.Sprintf("SELECT id, at FROM %s", quoteBare(h.kind(), table)))
+		if err != nil {
+			t.Fatalf("select timestamp: %v", err)
+		}
+		if len(res.Rows) != 1 || len(res.Rows[0]) != 2 {
+			t.Fatalf("rows = %+v", res.Rows)
+		}
+		got := res.Rows[0][1]
+		if got.Kind != dbcore.ValTime {
+			t.Fatalf("timestamp came back as kind %v, want ValTime (a driver that "+
+				"renders it as text loses the instant's type)", got.Kind)
+		}
+		if !got.T.Equal(want) {
+			t.Fatalf("timestamp round-trip = %v, want %v", got.T.UTC(), want)
+		}
+	})
 }
 
 // intCells reads the integer value of column col from every row.

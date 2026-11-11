@@ -135,10 +135,20 @@ type ConnQueryResult struct {
 }
 
 // ConnBrowseParams reads the first rows of one object.
+//
+// Filter, Sort and After carry the kernel request's filter expressions, sort
+// keys and keyset cursor so the plugin can apply them. A plugin that predates
+// these fields ignores them (JSON omitempty keeps older payloads unchanged),
+// but the host must not silently drop a non-empty filter — that would return
+// rows the caller did not ask for. The plugin returns ERR_NOT_SUPPORTED when
+// it receives filter/sort/after it cannot apply.
 type ConnBrowseParams struct {
-	ConnID string `json:"connId"`
-	Table  string `json:"table"`
-	Limit  int    `json:"limit"`
+	ConnID string      `json:"connId"`
+	Table  string      `json:"table"`
+	Limit  int         `json:"limit"`
+	Filter []FilterArg `json:"filter,omitempty"`
+	Sort   []SortArg   `json:"sort,omitempty"`
+	After  []CellPayload `json:"after,omitempty"`
 }
 
 // ConnCreateDBParams creates a database or schema.

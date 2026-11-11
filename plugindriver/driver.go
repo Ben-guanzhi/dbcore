@@ -295,6 +295,14 @@ func (d *Driver) call(ctx context.Context, method string, params interface{}) (j
 		d.mu.Lock()
 		delete(d.pending, id)
 		d.mu.Unlock()
+		// The caller gave up, but the plugin is still running the statement:
+		// notify it so the database/sql call aborts instead of holding the
+		// connection until it finishes. Fire-and-forget: the cancel rides the
+		// same goroutine-per-frame plugin loop (proto/serve.go), so it reaches
+		// the plugin while the statement is in flight; a plugin that predates
+		// the cancel method answers "unknown method" and the statement runs to
+		// completion exactly as before.
+		d.abandonNotify(method, raw)
 		return nil, ctx.Err()
 	case resp := <-ch:
 		if resp.Error != "" {
@@ -303,6 +311,42 @@ func (d *Driver) call(ctx context.Context, method string, params interface{}) (j
 		return resp.Result, nil
 	}
 }
+
+// abandonNotify tells the plugin one of its in-flight requests was given up on
+// by the host, so it can cancel the statement's context. The connection id is
+// sniffed from the abandoned request's own params — every connection-oriented
+// call carries it, and the statement-oriented kernel protocol is one
+// connection per process (an empty connId means "the process's only
+// connection", which the plugin-side Cancel treats as its own no-op error
+// path). Best-effort on both sides: a short deadline, both vocabularies
+// (fynequery's "cancel" first, the kernel's "connCancel" fallback), and a
+// plugin that predates the method just answers unknown-method.
+func (d *Driver) abandonNotify(method string, raw json.RawMessage) {
+	connID := ""
+	if len(raw) > 0 {
+		var sniff struct {
+			ConnID string `json:"connId"`
+		}
+		if json.Unmarshal(raw, &sniff) == nil {
+			connID = sniff.ConnID
+		}
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cancelNotifyGrace)
+		defer cancel()
+		params := map[string]string{"connId": connID}
+		if _, err := d.call(ctx, "cancel", params); err != nil && !isUnknownMethod(err) {
+			// Try the kernel spelling; the first word failed for a reason
+			// other than vocabulary (e.g. the plugin exited mid-call).
+			_, _ = d.call(ctx, MethodConnCancel, params)
+		}
+	}()
+}
+
+// cancelNotifyGrace bounds each abandon notification: the notify is a courtesy
+// (the statement would otherwise run to completion), never a reason for the
+// giving-up caller to wait.
+const cancelNotifyGrace = 2 * time.Second
 
 // pluginError maps the plugin's error onto the host's sentinels so a caller can test
 // with errors.Is instead of matching strings.
@@ -582,6 +626,11 @@ func browseArgs(schema, table string, req *dbcore.TableRowsRequest) BrowseArgs {
 			Op:     string(filter.Op),
 			Value:  EncodeValue(filter.Value),
 		})
+	}
+	// P3-7 回归：After 必须下发，不能静默丢弃。旧写法忽略 req.After，
+	// 插件收到无游标的浏览请求会返回第一页，调用方以为已翻页。
+	for _, v := range req.After {
+		out.After = append(out.After, EncodeValue(v))
 	}
 	return out
 }

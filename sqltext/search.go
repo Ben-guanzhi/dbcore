@@ -54,8 +54,8 @@ func SearchObjectsQuery(dbType, database, fragment string, limit int) (string, [
 		}
 		return fmt.Sprintf(`SELECT TOP (%d) TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
 			FROM %s.INFORMATION_SCHEMA.TABLES
-			WHERE TABLE_NAME LIKE %s ESCAPE '\' ORDER BY TABLE_NAME`,
-			limit, name, QuotedLiteral(SQLServer, pattern)), nil, nil
+			WHERE TABLE_NAME LIKE %s ORDER BY TABLE_NAME`,
+			limit, name, QuotedLiteral(SQLServer, mssqlLikePattern(fragment))), nil, nil
 	case Oracle:
 		return fmt.Sprintf(`SELECT * FROM (
 			SELECT OWNER, OBJECT_NAME, OBJECT_TYPE FROM ALL_OBJECTS
@@ -77,6 +77,18 @@ func upperASCII(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// mssqlLikePattern wraps the fragment for a T-SQL LIKE test. T-SQL's LIKE has
+// no ESCAPE clause and does not treat the backslash as an escape character at
+// all, so escaping the wildcards with "\%"/"\_" would leave them as wildcards
+// (and emit invalid SQL if an ESCAPE clause were appended). T-SQL's only escape
+// mechanism is the bracket character class, so [%], [_] and [[] are the
+// literal forms. The order matters: "[" first, so the class it produces is not
+// itself re-scanned. Mirrors db-dev's mssqlLikeLiteral exactly.
+func mssqlLikePattern(fragment string) string {
+	escaped := strings.NewReplacer("[", "[[]", "%", "[%]", "_", "[_]").Replace(fragment)
+	return "%" + escaped + "%"
 }
 
 // SearchDataQuery returns a statement searching keyword through ONE row of a
@@ -131,9 +143,11 @@ func SearchDataQuery(dbType, table string, columns []string, keyword string, lim
 		return fmt.Sprintf("SELECT * FROM %s WHERE %s LIMIT %d", table, strings.Join(parts, " OR "), limit), args, nil
 	case SQLServer:
 		// go-mssqldb leaves "?" unrewritten on literal paths (see
-		// SearchObjectsQuery's note), so the pattern rides inline.
+		// SearchObjectsQuery's note), so the pattern rides inline. T-SQL's LIKE
+		// has no ESCAPE clause — see mssqlLikePattern.
+		mssqlPattern := mssqlLikePattern(keyword)
 		for i, col := range conds {
-			conds[i] = col + " LIKE " + QuotedLiteral(SQLServer, pattern) + ` ESCAPE '\'`
+			conds[i] = col + " LIKE " + QuotedLiteral(SQLServer, mssqlPattern)
 		}
 		return fmt.Sprintf("SELECT TOP (%d) * FROM %s WHERE %s", limit, table, strings.Join(conds, " OR ")), nil, nil
 	case Oracle:
