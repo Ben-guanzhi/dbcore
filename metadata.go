@@ -470,3 +470,49 @@ type EnumTypeInfo struct {
 	Name   string
 	Labels []string
 }
+
+// InvalidObject is one catalog object Oracle reports as INVALID (W9).
+//
+// Type is Oracle's own spelling ("PROCEDURE", "PACKAGE BODY", "VIEW", …): it is
+// what the compile statement needs, and translating it would only add a mapping
+// to get wrong.
+type InvalidObject struct {
+	Name string
+	Type string
+}
+
+// ObjectDependency is one edge of the dependency graph, as ALL_DEPENDENCIES
+// records it (W9).
+//
+// Direction is "out" when the named object depends on the referenced one, and
+// "in" when something else depends on it. Both are reported because "what breaks
+// if I drop this" and "what do I need to fix this" are different questions.
+type ObjectDependency struct {
+	// Direction is "out" or "in".
+	Direction string
+	// Name and Type are the object at the FAR end of the edge: the referenced
+	// object for "out", the dependent one for "in".
+	Name string
+	Type string
+	// Owner is the far end's schema, which may be another schema: a dependency
+	// view exists to show exactly that.
+	Owner string
+}
+
+// Direction values for ObjectDependency.
+const (
+	DependencyOut = "out"
+	DependencyIn  = "in"
+)
+
+// CompileError is one diagnostic a failed compilation recorded (W9).
+//
+// Line and Position are the source coordinates Oracle reports (1-based; 0 when
+// the error is not positional, e.g. a whole-object problem). Text is the
+// engine's message with its PL/SQL prefix, e.g. "PL/SQL: ORA-00942: table or view
+// does not exist".
+type CompileError struct {
+	Line     int
+	Position int
+	Text     string
+}

@@ -325,3 +325,108 @@ func EnumTypesQuery(dbType, schema string) (string, []interface{}, error) {
 		ORDER BY t.typname, e.enumsortorder`,
 		[]interface{}{schema}, nil
 }
+
+// InvalidObjectsQuery lists the schema's INVALID objects (W9).
+//
+// Only Oracle keeps an object-status flag, so only Oracle answers: the other
+// engines have no "compiled and broken" state to report, and an empty list there
+// would be a lie rather than an absence.
+//
+// Package bodies are included separately by ALL_OBJECTS (OBJECT_TYPE is 'PACKAGE
+// BODY'), which matters for recompiling: `ALTER PACKAGE p COMPILE` compiles the
+// spec only, while a broken body needs `ALTER PACKAGE p COMPILE BODY`.
+func InvalidObjectsQuery(dbType, schema string) (string, []interface{}, error) {
+	if Normalize(dbType) != Oracle {
+		return "", nil, fmt.Errorf("sqltext: engine %q has no invalid-object state", dbType)
+	}
+	return fmt.Sprintf(`SELECT OBJECT_NAME, OBJECT_TYPE FROM ALL_OBJECTS
+		WHERE STATUS = 'INVALID' AND OWNER = %s
+		ORDER BY OBJECT_TYPE, OBJECT_NAME`,
+		QuotedLiteral(Oracle, upperASCII(schema))), nil, nil
+}
+
+// ObjectDependenciesQuery lists what an object depends on, and what depends on
+// it (W9). ALL_DEPENDENCIES records both directions in one row (OWNER/NAME is the
+// dependent, REFERENCED_OWNER/REFERENCED_NAME the thing it needs), so the driver
+// filters one column or the other.
+//
+// Referenced objects in other schemas are kept: "this view reads a table in
+// another schema" is exactly what a dependency view is for.
+func ObjectDependenciesQuery(dbType, schema, object string) (string, []interface{}, error) {
+	if Normalize(dbType) != Oracle {
+		return "", nil, fmt.Errorf("sqltext: engine %q has no dependency catalog", dbType)
+	}
+	return fmt.Sprintf(`SELECT OWNER, NAME, TYPE, REFERENCED_OWNER, REFERENCED_NAME, REFERENCED_TYPE
+		FROM ALL_DEPENDENCIES
+		WHERE (OWNER = %s AND NAME = %s) OR (REFERENCED_OWNER = %s AND REFERENCED_NAME = %s)
+		ORDER BY REFERENCED_OWNER, REFERENCED_NAME`,
+		QuotedLiteral(Oracle, upperASCII(schema)), QuotedLiteral(Oracle, upperASCII(object)),
+		QuotedLiteral(Oracle, upperASCII(schema)), QuotedLiteral(Oracle, upperASCII(object))), nil, nil
+}
+
+// CompileErrorsQuery lists the errors a failed compilation recorded for one
+// object (W9).
+//
+// This exists because ALTER … COMPILE SUCCEEDS even when the object cannot be
+// compiled: Oracle stores the diagnostics in ALL_ERRORS and leaves the object
+// INVALID. A UI that trusted the statement's success would tell the user "fixed"
+// about an object that is still broken, so the error list is what makes the
+// recompile honest.
+func CompileErrorsQuery(dbType, schema, object string) (string, []interface{}, error) {
+	if Normalize(dbType) != Oracle {
+		return "", nil, fmt.Errorf("sqltext: engine %q has no compile-error catalog", dbType)
+	}
+	return fmt.Sprintf(`SELECT LINE, POSITION, TEXT FROM ALL_ERRORS
+		WHERE OWNER = %s AND NAME = %s
+		ORDER BY SEQUENCE`,
+		QuotedLiteral(Oracle, upperASCII(schema)), QuotedLiteral(Oracle, upperASCII(object))), nil, nil
+}
+//
+// This is a WHITELIST, not a passthrough: the object type comes from a catalog row
+// (or, worse, from a client), and it is spliced into a statement where quoting is
+// not possible — Oracle's grammar wants the bare keyword. An unknown type is
+// refused with its name rather than interpolated.
+var compilableTypes = map[string]string{
+	"procedure":    "PROCEDURE",
+	"function":     "FUNCTION",
+	"package":      "PACKAGE",
+	"package body": "PACKAGE",
+	"trigger":      "TRIGGER",
+	"view":         "VIEW",
+	"type":         "TYPE",
+	"type body":    "TYPE",
+}
+
+// CompileStatement renders the ALTER … COMPILE for one object (W9).
+//
+// `PACKAGE BODY` and `TYPE BODY` need the BODY keyword or only the spec is
+// compiled: a body-invalid package would look recompiled and stay broken.
+func CompileStatement(dbType, schema, objectType, name string) (string, error) {
+	if Normalize(dbType) != Oracle {
+		return "", fmt.Errorf("sqltext: engine %q has no ALTER ... COMPILE", dbType)
+	}
+	lowerType := strings.ToLower(strings.TrimSpace(objectType))
+	keyword, ok := compilableTypes[lowerType]
+	if !ok {
+		return "", fmt.Errorf("sqltext: %q 不是可重编译的对象类型", objectType)
+	}
+	body := ""
+	if strings.HasSuffix(lowerType, " body") {
+		body = " BODY"
+	}
+	return "ALTER " + keyword + " " + QualifiedNameOrError(Oracle, upperASCII(schema), upperASCII(name)) + " COMPILE" + body, nil
+}
+
+// QualifiedNameOrError renders a quoted, schema-qualified name. It exists so
+// CompileStatement does not have to thread an error out of QualifiedName, which
+// rejects the same overlong/control-carrying names QuoteIdent does.
+func QualifiedNameOrError(dbType string, parts ...string) string {
+	q, err := QualifiedName(dbType, parts...)
+	if err != nil {
+		// The caller validated the parts already (they come from a catalog row);
+		// a failure here would be an unreachable state, and returning a broken
+		// statement is worse than returning the joined parts.
+		return strings.Join(parts, ".")
+	}
+	return q
+}

@@ -273,6 +273,37 @@ func AsExtraMetadata(d Driver) (ExtraMetadataReader, bool) {
 	return x, ok
 }
 
+// ObjectHealthReader is the optional capability for CATALOG MAINTENANCE facts:
+// which objects the engine reports as invalid (compiled but broken), and which
+// objects depend on which.
+//
+// Oracle is the engine with both concepts — it keeps a per-object STATUS, and
+// recompiling a broken object is a routine operation. The other engines answer
+// ErrNotSupported rather than an empty list: "everything is fine" and "this engine
+// has no such notion" are different answers, and an empty list would make a
+// working database look like a verified one.
+//
+// It is separate from ExtraMetadataReader because it is a different question:
+// ExtraMetadataReader describes WHAT exists, this describes WHAT IS BROKEN and
+// WHAT BREAKS WITH IT.
+type ObjectHealthReader interface {
+	// InvalidObjects lists the schema's INVALID objects, in type/name order.
+	InvalidObjects(ctx context.Context, schema string) ([]InvalidObject, error)
+	// ObjectDependencies lists one object's edges in both directions.
+	ObjectDependencies(ctx context.Context, schema, object string) ([]ObjectDependency, error)
+	// CompileErrors lists the diagnostics a failed compilation recorded for one
+	// object. It is the necessary companion to a recompile: the ALTER succeeds
+	// even when the object cannot be compiled, so the errors are the only honest
+	// answer to "did that fix it".
+	CompileErrors(ctx context.Context, schema, object string) ([]CompileError, error)
+}
+
+// AsObjectHealth is the capability assertion helper.
+func AsObjectHealth(d Driver) (ObjectHealthReader, bool) {
+	x, ok := d.(ObjectHealthReader)
+	return x, ok
+}
+
 // BatchColumnsReader reads every table's and view's columns of one schema in a
 // single round trip, keyed by ColumnInfo.Table. It is the batch form of
 // ListColumns: for every name ListTables returns, the grouped batch result

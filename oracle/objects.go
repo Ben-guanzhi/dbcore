@@ -1,4 +1,4 @@
-package oracle
+﻿package oracle
 
 // The ExtraMetadataReader surface for Oracle: view definitions, CHECK
 // constraints, sequences and routines all exist in the data dictionary.
@@ -169,3 +169,103 @@ func (d *OracleDriver) EnumTypes(ctx context.Context, schema string) ([]dbcore.E
 }
 
 var _ dbcore.ExtraMetadataReader = (*OracleDriver)(nil)
+
+// InvalidObjects lists the schema's INVALID objects (W9).
+//
+// An INVALID object is one Oracle failed to compile — typically a procedure whose
+// table was dropped, or a view over a changed column. Listing them is the first
+// half of the PL/SQL Developer workflow; RecompileObject is the second.
+func (d *OracleDriver) InvalidObjects(ctx context.Context, schema string) ([]dbcore.InvalidObject, error) {
+	s, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.InvalidObjectsQuery("oracle", s)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.InvalidObject, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		out = append(out, dbcore.InvalidObject{Name: r[0].S, Type: r[1].S})
+	}
+	return out, nil
+}
+
+// ObjectDependencies lists an object's edges in both directions (W9).
+//
+// ALL_DEPENDENCIES stores one row per edge with the dependent on the left and the
+// referenced object on the right, so a single query answers both questions; the
+// split here is which side of the row the named object sits on.
+func (d *OracleDriver) ObjectDependencies(ctx context.Context, schema, object string) ([]dbcore.ObjectDependency, error) {
+	if strings.TrimSpace(object) == "" {
+		return nil, fmt.Errorf("oracle: object name is required")
+	}
+	s, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.ObjectDependenciesQuery("oracle", s, object)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.ObjectDependency, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		// Columns: OWNER, NAME, TYPE, REFERENCED_OWNER, REFERENCED_NAME, REFERENCED_TYPE
+		owner, name, typ := r[0].S, r[1].S, r[2].S
+		refOwner, refName, refType := r[3].S, r[4].S, r[5].S
+		if strings.EqualFold(owner, s) && strings.EqualFold(name, object) {
+			// The named object is the DEPENDENT: it depends on the referenced one.
+			out = append(out, dbcore.ObjectDependency{
+				Direction: dbcore.DependencyOut,
+				Name:      refName, Type: refType, Owner: refOwner,
+			})
+			continue
+		}
+		// The named object is the REFERENCED one: this row's owner/name depends on it.
+		out = append(out, dbcore.ObjectDependency{
+			Direction: dbcore.DependencyIn,
+			Name:      name, Type: typ, Owner: owner,
+		})
+	}
+	return out, nil
+}
+
+
+// CompileErrors lists the diagnostics a failed compilation recorded (W9).
+//
+// ALTER … COMPILE SUCCEEDS even when the object cannot be compiled: Oracle writes
+// the errors to ALL_ERRORS and leaves the object INVALID. That is why this method
+// exists — "the statement ran" and "the object is fixed" are different facts, and
+// a UI that conflated them would report a broken object as repaired.
+func (d *OracleDriver) CompileErrors(ctx context.Context, schema, object string) ([]dbcore.CompileError, error) {
+	if strings.TrimSpace(object) == "" {
+		return nil, fmt.Errorf("oracle: object name is required")
+	}
+	s, err := d.resolveSchema(ctx, schema)
+	if err != nil {
+		return nil, err
+	}
+	q, a, err := sqltext.CompileErrorsQuery("oracle", s, object)
+	if err != nil {
+		return nil, err
+	}
+	res, err := dbcore.RunQuery(ctx, d.db, q, dbcore.ValuesOf(a))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]dbcore.CompileError, 0, len(res.Rows))
+	for _, r := range res.Rows {
+		line, _ := dbcore.IntFrom(r[0])
+		pos, _ := dbcore.IntFrom(r[1])
+		out = append(out, dbcore.CompileError{Line: int(line), Position: int(pos), Text: r[2].S})
+	}
+	return out, nil
+}
