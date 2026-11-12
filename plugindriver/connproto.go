@@ -67,6 +67,18 @@ const (
 	// that as "cancel is not supported"), and the in-flight statement runs to
 	// completion.
 	MethodConnCancel = "connCancel"
+	// MethodConnListActions asks a plugin to declare the console actions it
+	// offers on one connection. This is what makes a plugin able to expose a
+	// NON-SQL console — a vector search, a message consume, a config publish —
+	// without the host knowing what any of those mean. W17: the host stays a
+	// generic console runner; every piece of domain knowledge is plugin-side.
+	// Additive: a plugin that predates it answers ERR_NOT_SUPPORTED, and the
+	// host shows "no console actions" rather than an error.
+	MethodConnListActions = "connListActions"
+	// MethodConnRunAction runs one declared console action and returns a result
+	// shaped like a query result (columns + rows), so the host can render it in
+	// the ordinary grid. Additive for the same reason as ListActions.
+	MethodConnRunAction = "connRunAction"
 )
 
 // ConnectParams opens a connection on a plugin.
@@ -335,4 +347,37 @@ func DecodeConnColumn(raw json.RawMessage) ([]dbcore.ColumnInfo, error) {
 		})
 	}
 	return out, nil
+}
+
+// ConnActionParam describes one input a console action wants. The host renders a
+// field for it and sends the value back by Name — it does not interpret Kind, which
+// is only a hint for which control to draw ("text", "number", "textarea", "select").
+// Optional carries a JSON-encoded default so a select can offer choices.
+type ConnActionParam struct {
+	Name     string `json:"name"`
+	Label    string `json:"label,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Required bool   `json:"required,omitempty"`
+	Default  string `json:"default,omitempty"`
+}
+
+// ConnAction is one console action a plugin offers on a connection: a vector search,
+// a message consume, a config publish. The host lists these and runs them by ID; it
+// never learns what they mean. Group is a free-form label for grouping in the UI
+// ("检索", "消息", "配置").
+type ConnAction struct {
+	ID     string           `json:"id"`
+	Title  string           `json:"title"`
+	Group  string           `json:"group,omitempty"`
+	Danger bool             `json:"danger,omitempty"` // true = it can change remote state
+	Params []ConnActionParam `json:"params,omitempty"`
+}
+
+// ConnRunActionParams runs one declared action. Args is the action's params keyed by
+// Name, with values as JSON (string/number/bool). The host does not validate them —
+// the plugin owns the action's contract and answers ERR_INVALID_ARG for a bad one.
+type ConnRunActionParams struct {
+	ConnID string           `json:"connId"`
+	Action string           `json:"action"`
+	Args   map[string]any   `json:"args,omitempty"`
 }

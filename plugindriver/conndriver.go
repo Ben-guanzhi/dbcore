@@ -125,6 +125,45 @@ func (d *ConnDriver) CancelConn(ctx context.Context, connID string) error {
 	return err
 }
 
+// ListActions asks the plugin to declare the console actions it offers on one
+// connection — a vector search, a message consume, a config publish. The host stays a
+// generic runner: it lists these and runs them by ID, never interpreting them.
+//
+// Additive: a plugin that predates the method answers ERR_NOT_SUPPORTED, which the
+// caller treats as "this connection offers no console actions" rather than a failure —
+// an ordinary SQL plugin should not be penalized for not having a console.
+func (d *ConnDriver) ListActions(ctx context.Context, connID string) ([]ConnAction, error) {
+	raw, err := d.callConn(ctx, MethodConnListActions, ConnRef{ConnID: connID})
+	if err != nil {
+		return nil, err
+	}
+	var actions []ConnAction
+	if err := json.Unmarshal(raw, &actions); err != nil {
+		return nil, fmt.Errorf("plugindriver: decode the actions: %w", err)
+	}
+	return actions, nil
+}
+
+// RunAction runs one declared console action and returns a query-shaped result the
+// host renders in the ordinary grid. args are the action's params keyed by Name; the
+// plugin owns the action's contract and answers ERR_INVALID_ARG for a bad one, so the
+// host does not validate them here.
+func (d *ConnDriver) RunAction(
+	ctx context.Context,
+	connID, action string,
+	args map[string]any,
+) (*dbcore.QueryResult, error) {
+	raw, err := d.callConn(ctx, MethodConnRunAction, ConnRunActionParams{
+		ConnID: connID,
+		Action: action,
+		Args:   args,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return DecodeConnQueryResult(raw)
+}
+
 // Close shuts the plugin process down.
 func (d *ConnDriver) Close() error { return d.proc.Close() }
 

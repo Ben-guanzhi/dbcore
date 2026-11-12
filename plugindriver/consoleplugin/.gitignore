@@ -1,0 +1,4 @@
+# The plugin binary is a build artifact: `go build ./...` writes consoleplugin.exe here.
+# Build it into place with `go build -o <path> .` (see README) and never commit it.
+consoleplugin
+consoleplugin.exe
