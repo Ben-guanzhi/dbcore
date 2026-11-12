@@ -147,8 +147,13 @@ const (
 	MethodChannelData  = "workbench/channel/data"
 	MethodChannelSize  = "workbench/channel/resize"
 	MethodChannelClose = "workbench/channel/close"
-	MethodProxy        = "workbench/proxy"
-	MethodSecret       = "workbench/secret"
+	// MethodFilesAction is the W-F1 file-action surface (list/stat/mkdir/rename/
+	// upload/download), session-addressed like the channel methods. Additive: a
+	// plugin predating it answers ERR_NOT_SUPPORTED and the host keeps the
+	// terminal-only surface.
+	MethodFilesAction = "workbench/files/action"
+	MethodProxy       = "workbench/proxy"
+	MethodSecret      = "workbench/secret"
 )
 
 // BoundaryClass is §6.1's acquisition / emission split.
