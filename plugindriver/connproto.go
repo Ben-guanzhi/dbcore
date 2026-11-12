@@ -155,11 +155,11 @@ type ConnQueryResult struct {
 // rows the caller did not ask for. The plugin returns ERR_NOT_SUPPORTED when
 // it receives filter/sort/after it cannot apply.
 type ConnBrowseParams struct {
-	ConnID string      `json:"connId"`
-	Table  string      `json:"table"`
-	Limit  int         `json:"limit"`
-	Filter []FilterArg `json:"filter,omitempty"`
-	Sort   []SortArg   `json:"sort,omitempty"`
+	ConnID string        `json:"connId"`
+	Table  string        `json:"table"`
+	Limit  int           `json:"limit"`
+	Filter []FilterArg   `json:"filter,omitempty"`
+	Sort   []SortArg     `json:"sort,omitempty"`
 	After  []CellPayload `json:"after,omitempty"`
 }
 
@@ -366,10 +366,10 @@ type ConnActionParam struct {
 // never learns what they mean. Group is a free-form label for grouping in the UI
 // ("检索", "消息", "配置").
 type ConnAction struct {
-	ID     string           `json:"id"`
-	Title  string           `json:"title"`
-	Group  string           `json:"group,omitempty"`
-	Danger bool             `json:"danger,omitempty"` // true = it can change remote state
+	ID     string            `json:"id"`
+	Title  string            `json:"title"`
+	Group  string            `json:"group,omitempty"`
+	Danger bool              `json:"danger,omitempty"` // true = it can change remote state
 	Params []ConnActionParam `json:"params,omitempty"`
 }
 
@@ -377,7 +377,7 @@ type ConnAction struct {
 // Name, with values as JSON (string/number/bool). The host does not validate them —
 // the plugin owns the action's contract and answers ERR_INVALID_ARG for a bad one.
 type ConnRunActionParams struct {
-	ConnID string           `json:"connId"`
-	Action string           `json:"action"`
-	Args   map[string]any   `json:"args,omitempty"`
+	ConnID string         `json:"connId"`
+	Action string         `json:"action"`
+	Args   map[string]any `json:"args,omitempty"`
 }

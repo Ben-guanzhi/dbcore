@@ -54,7 +54,7 @@ type nacosConfigItem struct {
 }
 
 type nacosListResponse struct {
-	TotalCount int              `json:"totalCount"`
+	TotalCount int               `json:"totalCount"`
 	PageItems  []nacosConfigItem `json:"pageItems"`
 }
 
@@ -147,14 +147,20 @@ func (s *nacosSession) RunAction(ctx context.Context, action string, args map[st
 		if err != nil {
 			return nil, err
 		}
+		// Real-service integration finding: the v1 GET /configs?dataId&group endpoint
+		// returns the CONTENT ONLY, not the config's metadata. The old result had a
+		// "type" column whose value came from args["type"] — a parameter this action
+		// does not even declare, so that column was always empty. The list endpoint's
+		// pageItems do carry "type", but on a real Nacos it is null for most configs
+		// (verified against v2.3.2). Rather than show a column we cannot fill honestly,
+		// query-config returns the same three columns as Browse: group / dataId / content.
 		cols := []plugindriver.ConnColumn{
 			{Name: "group", Type: "TEXT"},
 			{Name: "dataId", Type: "TEXT"},
-			{Name: "type", Type: "TEXT"},
 			{Name: "content", Type: "TEXT"},
 		}
 		return result(cols, [][]plugindriver.CellPayload{{
-			textCell(group), textCell(dataID), textCell(argString(args, "type")), textCell(content),
+			textCell(group), textCell(dataID), textCell(content),
 		}}), nil
 	case "publish-config":
 		group := argString(args, "group")

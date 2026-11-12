@@ -86,26 +86,103 @@ func (s *milvusSession) Objects(ctx context.Context) ([]plugindriver.ConnObject,
 }
 
 // milvusField is one field of a collection's schema.
+//
+// Real-service integration finding (Milvus v2.5.4): describe returns fields at the
+// TOP level of data as `fields`, each with `name`/`type`/`primaryKey`/`nullable`, and
+// `params` as an ARRAY of {key,value} pairs whose "dim" value is a STRING. The shape
+// assumed from the docs (`data.schema.fields`, `is_primary_key`, `params:{dim:4}`) never
+// matches a real server — an httptest fake built from the docs hid that completely.
+// UnmarshalJSON accepts both spellings so one plugin works across versions.
 type milvusField struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	IsPrimaryKey bool   `json:"is_primary_key"`
-	Nullable     bool   `json:"is_nullable"`
-	Params       struct {
-		Dim int `json:"dim"`
-	} `json:"params"`
+	Name         string
+	Type         string
+	IsPrimaryKey bool
+	Nullable     bool
+	Dim          int
+}
+
+func (f *milvusField) UnmarshalJSON(raw []byte) error {
+	var base struct {
+		Name         string `json:"name"`
+		Type         string `json:"type"`
+		IsPrimaryKey bool   `json:"is_primary_key"`
+		PrimaryKey   bool   `json:"primaryKey"`
+		Nullable     bool   `json:"nullable"`
+		IsNullable   bool   `json:"is_nullable"`
+	}
+	if err := json.Unmarshal(raw, &base); err != nil {
+		return err
+	}
+	f.Name, f.Type = base.Name, base.Type
+	f.IsPrimaryKey = base.IsPrimaryKey || base.PrimaryKey
+	f.Nullable = base.Nullable || base.IsNullable
+	// params is either {"dim":4} or [{"key":"dim","value":"4"}].
+	var obj struct {
+		Dim json.RawMessage `json:"dim"`
+	}
+	if err := json.Unmarshal(raw, &obj); err == nil && len(obj.Dim) > 0 {
+		f.Dim = rawInt(obj.Dim)
+	}
+	if f.Dim == 0 {
+		var pairs []struct {
+			Key   string          `json:"key"`
+			Value json.RawMessage `json:"value"`
+		}
+		var holder struct {
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal(raw, &holder); err == nil && len(holder.Params) > 0 {
+			_ = json.Unmarshal(holder.Params, &pairs)
+			for _, p := range pairs {
+				if p.Key == "dim" {
+					f.Dim = rawInt(p.Value)
+				}
+			}
+			// The object form may also sit directly under params.
+			var pobj struct {
+				Dim json.RawMessage `json:"dim"`
+			}
+			if f.Dim == 0 {
+				_ = json.Unmarshal(holder.Params, &pobj)
+				f.Dim = rawInt(pobj.Dim)
+			}
+		}
+	}
+	return nil
+}
+
+// rawInt reads a JSON number or a numeric string ("4") into an int, since Milvus v2
+// returns element-type params as strings.
+func rawInt(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var n int
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		_, _ = fmt.Sscanf(s, "%d", &n)
+	}
+	return n
 }
 
 func (s *milvusSession) describe(ctx context.Context, collection string) ([]milvusField, error) {
+	// Two spellings: real v2.5 has `fields` at data's top level; older docs put them
+	// under `schema`. Decode both so one binary survives a version change.
 	var data struct {
+		Fields []milvusField `json:"fields"`
 		Schema struct {
 			Fields []milvusField `json:"fields"`
 		} `json:"schema"`
-		PrimaryField string `json:"primaryField"`
 	}
 	if err := s.call(ctx, "/v2/vectordb/collections/describe",
 		map[string]any{"dbName": s.db, "collectionName": collection}, &data); err != nil {
 		return nil, err
+	}
+	if len(data.Fields) > 0 {
+		return data.Fields, nil
 	}
 	return data.Schema.Fields, nil
 }
@@ -120,8 +197,8 @@ func (s *milvusSession) Columns(ctx context.Context, object string) ([]plugindri
 		c := plugindriver.ConnColumn{Name: f.Name, Type: f.Type, Nullable: f.Nullable}
 		// The vector dimension is the one thing a SQL column header cannot show, and
 		// it is the thing a user needs to know before they search.
-		if f.Params.Dim > 0 {
-			c.Type = fmt.Sprintf("%s(%d)", f.Type, f.Params.Dim)
+		if f.Dim > 0 {
+			c.Type = fmt.Sprintf("%s(%d)", f.Type, f.Dim)
 		}
 		if f.IsPrimaryKey {
 			c.Key = "PK"
@@ -144,8 +221,8 @@ func (s *milvusSession) Browse(ctx context.Context, object string, limit int) (*
 	for _, f := range fields {
 		names = append(names, f.Name)
 		col := plugindriver.ConnColumn{Name: f.Name, Type: f.Type, Nullable: f.Nullable}
-		if f.Params.Dim > 0 {
-			col.Type = fmt.Sprintf("%s(%d)", f.Type, f.Params.Dim)
+		if f.Dim > 0 {
+			col.Type = fmt.Sprintf("%s(%d)", f.Type, f.Dim)
 		}
 		if f.IsPrimaryKey {
 			col.Key = "PK"
@@ -213,28 +290,43 @@ func (s *milvusSession) RunAction(ctx context.Context, action string, args map[s
 	} else {
 		body["outputFields"] = []string{"*"}
 	}
-	var data [][]map[string]any
-	if err := s.call(ctx, "/v2/vectordb/entities/search", body, &data); err != nil {
+	// Real-service integration finding (Milvus v2.5.4): search's `data` is a FLAT
+	// array of hit objects — [{distance,id,title,vec}, ...] — not the nested
+	// [[{...}]] shape the docs (and our first fake service) implied. Accept both so a
+	// plugin built against one version keeps working with the other.
+	var rawHits []json.RawMessage
+	if err := s.call(ctx, "/v2/vectordb/entities/search", body, &rawHits); err != nil {
 		return nil, fmt.Errorf("向量检索: %w", err)
 	}
-	// data[0] is the hit list for the first (here, only) query vector.
+	hits := make([]map[string]any, 0, len(rawHits))
+	for _, raw := range rawHits {
+		var hit map[string]any
+		if err := json.Unmarshal(raw, &hit); err == nil {
+			hits = append(hits, hit)
+			continue
+		}
+		// Nested form: one query vector's hit list per element; we send one vector,
+		// so take the first list.
+		var group []map[string]any
+		if err := json.Unmarshal(raw, &group); err == nil {
+			hits = append(hits, group...)
+		}
+	}
 	var rows [][]plugindriver.CellPayload
 	cols := []plugindriver.ConnColumn{{Name: "rank", Type: "INT"}, {Name: "distance", Type: "FLOAT"}}
-	if len(data) > 0 {
-		for i, hit := range data[0] {
-			if i == 0 {
-				// Discover the hit's fields from the first row so the columns match
-				// whatever the server returned, then prepend rank/distance once.
-				for _, name := range orderedKeys(hit, "distance") {
-					cols = append(cols, plugindriver.ConnColumn{Name: name, Type: "TEXT"})
-				}
-			}
-			row := []plugindriver.CellPayload{intCell(int64(i + 1)), floatCell(toFloat(hit["distance"]))}
+	for i, hit := range hits {
+		if i == 0 {
+			// Discover the hit's fields from the first row so the columns match whatever
+			// the server returned, then prepend rank/distance once.
 			for _, name := range orderedKeys(hit, "distance") {
-				row = append(row, anyCell(hit[name]))
+				cols = append(cols, plugindriver.ConnColumn{Name: name, Type: "TEXT"})
 			}
-			rows = append(rows, row)
 		}
+		row := []plugindriver.CellPayload{intCell(int64(i + 1)), floatCell(toFloat(hit["distance"]))}
+		for _, name := range orderedKeys(hit, "distance") {
+			row = append(row, anyCell(hit[name]))
+		}
+		rows = append(rows, row)
 	}
 	return result(cols, rows), nil
 }

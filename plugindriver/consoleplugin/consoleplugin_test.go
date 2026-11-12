@@ -37,8 +37,11 @@ func TestNacosConsole(t *testing.T) {
 			if q.Get("pageNo") != "" {
 				// The list call, which also sends an EMPTY dataId — so branch on
 				// pageNo, not on the mere presence of the key.
+				// Real Nacos v2.3.2 list shape (verified against a standalone instance):
+				// the page items carry many fields, and "type" is null for most configs.
+				// A decoder that assumed a non-null type used to break on this.
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, `{"totalCount":1,"pageItems":[{"dataId":"app.json","group":"APP","type":"json"}]}`)
+				fmt.Fprint(w, `{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1089366333","dataId":"app.json","group":"APP","content":null,"md5":null,"encryptedDataKey":"","tenant":"","appName":"","type":null}]}`)
 				return
 			}
 			if q.Get("dataId") != "" {
@@ -88,8 +91,11 @@ func TestNacosConsole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if asCell(qr.Rows[0][3]).Text != "hello-content" {
+	if asCell(qr.Rows[0][2]).Text != "hello-content" {
 		t.Fatalf("query-config = %+v", qr.Rows[0])
+	}
+	if len(qr.Rows[0]) != 3 {
+		t.Fatalf("query-config must have 3 columns (group/dataId/content), got %d", len(qr.Rows[0]))
 	}
 
 	// publish-config action writes remote state; the fake proves the form arrives.
@@ -133,14 +139,19 @@ func TestMilvusConsole(t *testing.T) {
 		case "/v2/vectordb/collections/list":
 			fmt.Fprint(w, `{"code":0,"data":["books","movies"]}`)
 		case "/v2/vectordb/collections/describe":
-			fmt.Fprint(w, `{"code":0,"data":{"schema":{"fields":[
-				{"name":"id","type":"INT64","is_primary_key":true},
-				{"name":"vec","type":"FLOAT_VECTOR","params":{"dim":4}}]},
-				"primaryField":"id"}}`)
+			// REAL Milvus v2.5.4 shape (captured from a live standalone): fields at
+			// data's top level, `primaryKey`/`nullable`, and params as [{key,value}]
+			// with dim as a STRING. The old fake used data.schema.fields +
+			// is_primary_key + params:{dim:4}, which no real server returns.
+			fmt.Fprint(w, `{"code":0,"data":{"collectionName":"books","fields":[
+				{"id":100,"name":"id","type":"Int64","primaryKey":true,"nullable":false},
+				{"id":101,"name":"vec","type":"FloatVector","nullable":false,"params":[{"key":"dim","value":"4"}]}],
+				"indexes":[],"load":"LoadStateLoaded"}}`)
 		case "/v2/vectordb/entities/query":
 			fmt.Fprint(w, `{"code":0,"data":[{"id":1,"name":"a"}]}`)
 		case "/v2/vectordb/entities/search":
-			fmt.Fprint(w, `{"code":0,"data":[[{"distance":0.2,"id":1,"name":"a"},{"distance":0.5,"id":2,"name":"b"}]]}`)
+			// Real v2.5.4: data is a FLAT array of hit objects, not [[{...}]].
+			fmt.Fprint(w, `{"code":0,"data":[{"distance":0.2,"id":1,"name":"a"},{"distance":0.5,"id":2,"name":"b"}]}`)
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -168,7 +179,7 @@ func TestMilvusConsole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cols[0].Key != "PK" || !strings.Contains(cols[1].Type, "FLOAT_VECTOR(4)") {
+	if cols[0].Key != "PK" || !strings.Contains(cols[1].Type, "FloatVector(4)") {
 		t.Fatalf("columns = %+v", cols)
 	}
 
@@ -209,7 +220,15 @@ func TestMilvusConsole(t *testing.T) {
 // ---------- Pulsar ----------
 
 func TestPulsarConsole(t *testing.T) {
+	var bogusBacklogCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A request to the invented /subscription/{sub}/backlog endpoint must NEVER
+		// happen: Pulsar 3.0 has no such admin path (verified in PersistentTopics.java).
+		if strings.Contains(r.URL.Path, "/backlog") {
+			bogusBacklogCalls++
+			http.Error(w, "no such endpoint", http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/admin/v2/tenants":
@@ -220,12 +239,12 @@ func TestPulsarConsole(t *testing.T) {
 			fmt.Fprint(w, `["persistent://t1/ns1/orders"]`)
 		case "/admin/v2/persistent/t1/ns1/orders/subscriptions":
 			fmt.Fprint(w, `["sub-a","sub-b"]`)
-		case "/admin/v2/persistent/t1/ns1/orders/subscription/sub-a/backlog":
-			fmt.Fprint(w, `7`)
-		case "/admin/v2/persistent/t1/ns1/orders/subscription/sub-b/backlog":
-			fmt.Fprint(w, `0`)
 		case "/admin/v2/persistent/t1/ns1/orders/stats":
-			fmt.Fprint(w, `{"msgInRate":1.5,"publishers":1}`)
+			// REAL Pulsar 3.0 contract (PersistentTopics.getStats): /stats carries a
+			// `subscriptions` map with each subscription's msgBacklog. There is NO
+			// /subscription/{sub}/backlog endpoint — the old fake invented one, which
+			// is exactly why the plugin's wrong path went unnoticed.
+			fmt.Fprint(w, `{"msgRateIn":1.5,"publishers":1,"subscriptions":{"sub-a":{"msgBacklog":7},"sub-b":{"msgBacklog":0}}}`)
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -268,7 +287,7 @@ func TestPulsarConsole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(asCell(sr.Rows[0][0]).Text, "msgInRate") {
+	if !strings.Contains(asCell(sr.Rows[0][0]).Text, "msgRateIn") {
 		t.Fatalf("stats = %+v", sr.Rows[0])
 	}
 
@@ -280,6 +299,9 @@ func TestPulsarConsole(t *testing.T) {
 	if asCell(nr.Rows[0][0]).Text != "t1/ns1" {
 		t.Fatalf("namespaces = %+v", nr.Rows)
 	}
+	if bogusBacklogCalls != 0 {
+		t.Fatalf("called the nonexistent /backlog endpoint %d times", bogusBacklogCalls)
+	}
 }
 
 // ---------- Kafka ----------
@@ -287,8 +309,8 @@ func TestPulsarConsole(t *testing.T) {
 // fakeTopicLister etc. stand in for the broker-touching interfaces, so the mapping from
 // a Kafka message to a grid row is tested without a running broker.
 type fakeTopicLister struct {
-	topics  []string
-	parts   map[string][]int
+	topics []string
+	parts  map[string][]int
 }
 
 func (f fakeTopicLister) ListTopics(context.Context) ([]string, error) { return f.topics, nil }
@@ -307,7 +329,10 @@ func (f fakeConsumer) Consume(context.Context, string, consumeOpts) ([]consoleMe
 
 type fakeProducer struct{ got string }
 
-func (f *fakeProducer) Produce(context.Context, string, string, string) error { f.got = "sent"; return nil }
+func (f *fakeProducer) Produce(context.Context, string, string, string) error {
+	f.got = "sent"
+	return nil
+}
 
 func TestKafkaConsoleMapping(t *testing.T) {
 	sess := &kafkaSession{
@@ -384,8 +409,8 @@ func (fakeSession) Close() error { return nil }
 
 type fakeProvider struct{ sess Session }
 
-func (fakeProvider) Kind() string                    { return "test" }
-func (fakeProvider) Name() string                    { return "Test Console" }
+func (fakeProvider) Kind() string { return "test" }
+func (fakeProvider) Name() string { return "Test Console" }
 func (p fakeProvider) Open(context.Context, plugindriver.ConnectParams) (Session, error) {
 	return p.sess, nil
 }
@@ -476,7 +501,8 @@ func TestServerDispatchFrames(t *testing.T) {
 func TestServerDispatchWithRealProvider(t *testing.T) {
 	svc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("pageNo") != "" {
-			fmt.Fprint(w, `{"totalCount":1,"pageItems":[{"dataId":"app.json","group":"APP"}]}`)
+			// Real Nacos v2.3.2 shape: extra fields, type: null.
+			fmt.Fprint(w, `{"totalCount":1,"pageNumber":1,"pagesAvailable":1,"pageItems":[{"id":"1","dataId":"app.json","group":"APP","content":null,"md5":null,"encryptedDataKey":"","tenant":"","appName":"","type":null}]}`)
 			return
 		}
 		fmt.Fprint(w, "cfg-content")
@@ -529,7 +555,7 @@ func TestServerDispatchWithRealProvider(t *testing.T) {
 	run := call(plugindriver.Request{ID: 4, Method: plugindriver.MethodConnRunAction,
 		Params: mustJSON(t, plugindriver.ConnRunActionParams{
 			ConnID: o.ConnID, Action: "query-config",
-			Args:   map[string]any{"dataId": "app.json", "group": "APP"},
+			Args: map[string]any{"dataId": "app.json", "group": "APP"},
 		})})
 	if run.Error != "" {
 		t.Fatalf("run: %s", run.Error)
@@ -538,8 +564,8 @@ func TestServerDispatchWithRealProvider(t *testing.T) {
 	if err := json.Unmarshal(run.Result, &qr); err != nil || len(qr.Rows) != 1 {
 		t.Fatalf("run result = %v (%v)", qr, err)
 	}
-	if qr.Rows[0][3].S != "cfg-content" {
-		t.Fatalf("run cell = %+v", qr.Rows[0][3])
+	if qr.Rows[0][2].S != "cfg-content" {
+		t.Fatalf("run cell = %+v", qr.Rows[0][2])
 	}
 }
 

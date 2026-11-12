@@ -78,12 +78,16 @@ func ProviderNames() []string {
 // text/int/bool/float/null build the tagged cells the protocol carries. A console's
 // values are mostly text (JSON bodies, IDs, topic names) and ints (offsets, counts),
 // with the occasional bool for a primary-key or partition flag.
-func textCell(s string) plugindriver.CellPayload { return plugindriver.CellPayload{Kind: "text", Text: s} }
-func intCell(i int64) plugindriver.CellPayload   { return plugindriver.CellPayload{Kind: "int", Int: i} }
+func textCell(s string) plugindriver.CellPayload {
+	return plugindriver.CellPayload{Kind: "text", Text: s}
+}
+func intCell(i int64) plugindriver.CellPayload { return plugindriver.CellPayload{Kind: "int", Int: i} }
 func floatCell(f float64) plugindriver.CellPayload {
 	return plugindriver.CellPayload{Kind: "float", Flt: f}
 }
-func boolCell(b bool) plugindriver.CellPayload { return plugindriver.CellPayload{Kind: "bool", Bool: b} }
+func boolCell(b bool) plugindriver.CellPayload {
+	return plugindriver.CellPayload{Kind: "bool", Bool: b}
+}
 
 // textCol is the common column builder: name + a display type.
 func textCol(name string) plugindriver.ConnColumn {

@@ -70,13 +70,103 @@ go build -o consoleplugin.exe .
 列集合、看字段、读实体都在对象树里，但"给我离这个向量最近的 top-K"是一个动作——它接收
 用户粘贴的向量、anns 字段和 topK，返回带距离的排序命中。
 
-## 诚实的边界
+## 真实服务联调（2026-11-12）
 
-- **HTTP provider（Nacos/Milvus/Pulsar）用 `httptest` 假服务测试**：证明的是映射逻辑
-  与非 2xx 会作为错误上浮（而不是伪装成"0 行"）。**没有**对真实服务做过联调；各产品的
-  REST 路径按官方 admin/Open API 文档编写，**版本差异可能需要调整**。
-- **Kafka** 的 broker 代码是薄封装（`segmentio/kafka-go`），消费/生产的映射逻辑通过注入
-  接口测试（无需 broker），但**真实 broker 行为未在本波验证**。
+`liveprobe/` 是一个手工联调夹具：用真实的 `consoleplugin.exe` 逐帧走
+`open → tables → browse → connListActions → connRunAction → close`，对面是真实服务，
+不是 httptest。它**不在** `go test` 里运行（需要活着的服务）。
+
+```powershell
+go build -o consoleplugin.exe .
+$env:TABLEPRO_LIVE_BIN = (Resolve-Path .\consoleplugin.exe).Path
+
+# Nacos（真实 v2.3.2，只读；另有 publish-config 写专用 dataId 后删除的用例）
+go run ./liveprobe nacos http://localhost:8848
+
+# Milvus（真实 v2.5.4；集合需按 create→insert→create index→load 的顺序准备好）
+$env:TABLEPRO_LIVE_OBJECT = 'default/liveprobe'
+$env:TABLEPRO_LIVE_ACTION = 'vector-search'
+$env:TABLEPRO_LIVE_ARGS = '{"collection":"liveprobe","vector":"0.1,0.2,0.3,0.4","annsField":"vec","topK":3}'
+go run ./liveprobe milvus http://localhost:19530
+
+# Kafka（真实 3.9.0 KRaft；ConnectParams 的 Host/Port 分开传，夹具自动从 URL 拆）
+$env:TABLEPRO_LIVE_OBJECT = 'liveprobe'
+$env:TABLEPRO_LIVE_ACTION = 'consume-messages'
+$env:TABLEPRO_LIVE_ARGS = '{"topic":"liveprobe","partition":0,"offset":-2,"max":10,"timeoutMs":5000}'
+go run ./liveprobe kafka localhost:9092
+```
+
+`TABLEPRO_LIVE_HOST` / `TABLEPRO_LIVE_PORT` 可覆盖夹具推导出的 host/port；
+`TABLEPRO_LIVE_OBJECT` / `TABLEPRO_LIVE_ACTION` / `TABLEPRO_LIVE_ARGS` 控制 browse 的
+对象名与要运行的动作。夹具打印每一帧的 err/code/result（长结果截断），便于逐帧判断
+真实服务的响应形状是否与插件假设一致。
+
+### 已联调通过
+
+| 引擎 | 真实实例 | 结果 |
+|---|---|---|
+| **Nacos** | `nacos/nacos-server:v2.3.2` standalone，5 个真实配置 | ✅ 全链路通过：`tables` 列出 5 个 `group/dataId`；`browse` 读回真实配置内容；`query-config` 动作成功；`publish-config` 写入专用 dataId、读回 `liveprobe: ok`、随即删除（未触碰任何已有配置） |
+| **Milvus** | `milvusdb/milvus:v2.5.4` standalone（内嵌 etcd/local 存储），真实集合 `liveprobe`（4 维向量、3 条实体、L2 索引） | ✅ 全链路通过：`tables` 列出 `default/liveprobe`；`browse` 显示 `id/title/vec` 三列含 `FloatVector(4)` 维度；`vector-search` 返回按 L2 距离排序的 3 条命中（0 → 0.01 → 1.2），与直接调 REST 一致 |
+| **Kafka** | `apache/kafka:3.9.0` KRaft 单节点，真实主题 `liveprobe`（1 分区、3 条消息） | ✅ 全链路通过：`tables` 列出 `liveprobe`；`browse` 与 `consume-messages` 都返回 3 条真实消息（offset 0/1/2 + 时间戳）；`produce-message` 写入 `plugin-produced` 并用官方 console-consumer 回读确认 |
+
+### 联调抓到并修掉的真实缺陷（httptest 假服务全部掩盖）
+
+1. **Nacos `query-config` 的 `type` 列永远为空**：值取自 `args["type"]`，而该动作的参数
+   根本没有 `type`；且 v1 GET 只返回正文、不含元数据，真实列表里 `type` 多为 `null`。
+   去掉该列，与 `browse` 一致（group/dataId/content）。
+2. **Milvus `describe` 的真实形状与文档不同**：真实 v2.5.4 把 `fields` 放在 `data` 顶层，
+   字段是 `name/type/primaryKey/nullable`，`params` 是 `[{key,value}]` 数组且 `dim` 是
+   **字符串**；假服务用的 `data.schema.fields` + `is_primary_key` + `params:{dim:4}`
+   真实服务器从不返回。后果是 `browse` 曾返回**空列 + 空行**。现在 `UnmarshalJSON`
+   同时接受两种拼写。
+3. **Milvus `search` 的 `data` 是扁平对象数组**：真实响应是 `[{distance,id,...}]`，不是
+   假服务写的 `[[{...}]]`；旧代码直接 `cannot unmarshal object into .0`。现在先解码为
+   `[]json.RawMessage` 再逐条判断，两种形状都吃。
+4. **Milvus 集合状态机**：create → insert 之后集合**默认未 load**，query/search 报
+   `collection not loaded`；load 又要求先建向量索引（否则 `index not found`）。这是集合
+   生命周期约束，不是插件 bug —— 联调中按真实顺序准备数据后全部通过，README 记录于此，
+   避免把"未 load 的集合"误判成插件故障。
+5. **Kafka 的连接参数形状**：`ConnectParams` 把 `Host`/`Port` **分开**传（真实客户端
+   就是这样），`baseUrl` 只是 HTTP provider 的覆盖项。第一版联调夹具把
+   `localhost:9092` 塞进 `baseUrl`，结果 Kafka provider 读到空 Host、拼出 `live:9092`。
+   夹具已改为按真实客户端形状传 `host`+`port`；插件代码本身无需改动。
+6. **Pulsar 的 `/subscription/{sub}/backlog` 端点不存在**（源码核对发现，详见
+   "仍未覆盖"）：backlog 来自 `/stats` 的 `subscriptions[sub].msgBacklog`。旧代码配合
+   虚构该端点的假服务会把积压静默显示成 0。已改为一次 `/stats` 填满整表。
+
+**部署坑（非插件问题，记录给复现者）**：`apache/kafka:3.9.0` 的 KRaft 单节点若把
+`PLAINTEXT` 监听器绑到容器内 `localhost`，Windows→WSL2 的端口转发能连上 TCP 但 Kafka
+协议层随后 `unexpected EOF`；必须用 `PLAINTEXT://0.0.0.0:9092` 绑定 + `advertised`
+用 `localhost:9092`，controller 监听器单独留在 `localhost:9093`。
+
+**假服务已改成真实响应形状**（Nacos 的 `type:null` 与额外字段、Milvus 的真实 describe /
+search 形状），所以后续回归测试钉住的是**真实协议**，不是文档想象。Kafka 的映射逻辑
+本就通过注入接口测试，真实 broker 另由上述联调覆盖。
+
+### 仍未覆盖 / 部分覆盖
+
+- **Pulsar 真实实例未起**：可达镜像源（`docker.1panel.live`）上
+  `apachepulsar/pulsar:2.11.4` / `3.0.12` 的 manifest 均存在，但大层传输持续超时或
+  连接重置（多次重试累计超过 1 小时、含 10 分钟上限的最终重试，均以
+  `connection timed out` 结束）；`docker.m.daocloud.io` 返回 401，Docker Hub 直连
+  不可达。**没有真实 Pulsar broker 的帧级联调**。
+
+  **但做了源码级契约核对**：从 Apache Pulsar `branch-3.0` 官方源码逐一确认了插件用到的
+  admin v2 路径——
+  `GET /admin/v2/tenants`（`Tenants.java`）、
+  `GET /admin/v2/namespaces/{tenant}`（`Namespaces.java`）、
+  `GET /admin/v2/persistent/{tenant}/{namespace}` 列主题、
+  `GET …/{topic}/subscriptions`、`GET …/{topic}/stats`（`PersistentTopics.java`）。
+  核对抓到一个**真实契约缺陷**：插件原来调用的
+  `GET …/subscription/{sub}/backlog` 端点**在官方源码中不存在**；backlog 实际来自
+  `/stats` 响应的 `subscriptions[sub].msgBacklog`。旧代码（配合一个同样虚构该端点的
+  httptest 假服务）会把每个订阅的积压静默显示成 0。已改为**一次 `/stats` 填满整表**，
+  假服务改用官方真实结构，并加回归断言确保永不调用那个虚构路径。
+
+  结论：Pulsar 的路径契约已由官方源码钉住，但**运行时行为（认证、重定向、stats 的
+  实际字段细节）仍未经真实服务器验证**，这是四个引擎里唯一未做实例联调的一个。
+- `distance=0` 的最近命中在协议里编码为 `{"k":"float"}`（`Flt` 的 `omitempty` 省略零值），
+  内核解码为 0，语义正确但文本上不显式；这是内核既有编码约定，未改动。
 - 控制台的 SQL 面是**如实拒绝**：`Execute` 返回"此引擎不支持 SQL"，而不是假装成功返回
   空结果——后者用户无法与"真的没有行"区分。
 - server 模式（`--serve`）的只读白名单**只放行 `/api/plugin/actions`**，不运行动作：宿主

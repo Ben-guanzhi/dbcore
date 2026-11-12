@@ -15,7 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/dbcore/dbcore"
@@ -120,27 +119,56 @@ func (s *pulsarSession) Columns(_ context.Context, _ string) ([]plugindriver.Con
 	return []plugindriver.ConnColumn{
 		{Name: "subscription", Type: "TEXT"},
 		{Name: "backlog", Type: "BIGINT"},
-		{Name: "blocked", Type: "BOOL"},
 	}, nil
 }
 
 // Browse lists a topic's subscriptions with their backlog — the operator's daily view.
+//
+// Contract verified against the Pulsar 3.0 source (PersistentTopics.java): there is NO
+// standalone `/subscription/{sub}/backlog` admin endpoint. Backlog comes from the
+// `/stats` document's `subscriptions` map, keyed by subscription name, as msgBacklog.
+// The old code called a nonexistent path and silently degraded every backlog to 0 —
+// an httptest fake that answered that path made it look correct. One stats request now
+// fills the whole table instead of one request per subscription.
 func (s *pulsarSession) Browse(ctx context.Context, topic string, _ int) (*plugindriver.ConnQueryResult, error) {
 	var subs []string
 	path := topicPath(topic) + "/subscriptions"
 	if err := s.admin(ctx, path, &subs); err != nil {
 		return nil, fmt.Errorf("列出订阅: %w", err)
 	}
+	backlogs := s.statsBacklogs(ctx, topic)
 	cols := []plugindriver.ConnColumn{
 		{Name: "subscription", Type: "TEXT"},
 		{Name: "backlog", Type: "BIGINT"},
 	}
 	var rows [][]plugindriver.CellPayload
 	for _, sub := range subs {
-		backlog := s.backlogOf(ctx, topic, sub)
-		rows = append(rows, []plugindriver.CellPayload{textCell(sub), intCell(backlog)})
+		rows = append(rows, []plugindriver.CellPayload{textCell(sub), intCell(backlogs[sub])})
 	}
 	return result(cols, rows), nil
+}
+
+// statsBacklogs reads the topic's /stats once and extracts each subscription's
+// msgBacklog. A failure (or a stats shape we do not recognise) degrades to zero rather
+// than aborting the browse: the subscription list is still worth showing.
+func (s *pulsarSession) statsBacklogs(ctx context.Context, topic string) map[string]int64 {
+	out := map[string]int64{}
+	body, status, err := s.c.get(ctx, topicPath(topic)+"/stats", nil)
+	if err != nil || status >= 400 {
+		return out
+	}
+	var stats struct {
+		Subscriptions map[string]struct {
+			MsgBacklog int64 `json:"msgBacklog"`
+		} `json:"subscriptions"`
+	}
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return out
+	}
+	for name, sub := range stats.Subscriptions {
+		out[name] = sub.MsgBacklog
+	}
+	return out
 }
 
 func (s *pulsarSession) Actions() []plugindriver.ConnAction {
@@ -207,18 +235,6 @@ func (s *pulsarSession) RunAction(ctx context.Context, action string, args map[s
 	default:
 		return nil, &dbcore.Error{Code: dbcore.ErrCodeNotSupported, Message: "未知动作 " + action}
 	}
-}
-
-// backlogOf reads one subscription's backlog; a failure to read one subscription is not
-// fatal to the list, so it degrades to 0 rather than aborting the whole browse.
-func (s *pulsarSession) backlogOf(ctx context.Context, topic, sub string) int64 {
-	body, status, err := s.c.get(ctx, topicPath(topic)+"/subscription/"+url.PathEscape(sub)+"/backlog", nil)
-	if err != nil || status >= 400 {
-		return 0
-	}
-	var n int64
-	_ = json.Unmarshal(body, &n)
-	return n
 }
 
 func (s *pulsarSession) Close() error { return nil }
