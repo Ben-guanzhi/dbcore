@@ -147,6 +147,11 @@ var patterns = []pattern{
 	{UniqueViolation, []string{"VIOLATION OF UNIQUE KEY"}},            // MSSQL 2627/2601
 	{UniqueViolation, []string{"CANNOT INSERT DUPLICATE KEY"}},        // MSSQL 2601
 	{UniqueViolation, []string{"ORA-00001"}},                          // Oracle unique
+	// W14: DM8's own code for a uniqueness violation, verified on a live instance:
+	// "Error -6602: 违反表[...]唯一性约束条件[...]". Without this the client's grid
+	// would show a generic failure where every other engine says "duplicate".
+	{UniqueViolation, []string{"-6602"}},
+	{UniqueViolation, []string{"唯一性约束"}},
 	{UniqueViolation, []string{"CONSTRAINT", "PRIMARY KEY"}},          // SQLite "PRIMARY KEY constraint failed", MSSQL PK
 	{ForeignKeyViolation, []string{"FOREIGN KEY CONSTRAINT"}},         // PG/SQLite/MSSQL
 	{ForeignKeyViolation, []string{"ERROR 1451"}},                     // MySQL delete parent

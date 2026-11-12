@@ -156,6 +156,42 @@ func fixturesFor(kind dbcore.DatabaseKind) fixtures {
 				return []string{fmt.Sprintf("IF OBJECT_ID('%s', 'P') IS NOT NULL DROP PROCEDURE %s", n, n)}
 			},
 		}
+	case dbcore.KindDM:
+		// W14: DM8 in its Oracle-compatible mode. The Oracle fixture is close but not
+		// usable as-is: DM maps a bare TEXT to CLOB, and DM refuses a unique index on
+		// a CLOB column ("试图在BLOB/CLOB…列上建索引") — so `tag` is VARCHAR here.
+		// Sequences, routines and ranges behave as in Oracle; DROP TABLE IF EXISTS
+		// exists in DM, so the cleanup needs no anonymous block.
+		return fixtures{
+			childTable: func(child, parent, fk, ux, ix string) []string {
+				return []string{
+					fmt.Sprintf("CREATE TABLE %s (id NUMBER PRIMARY KEY, pid NUMBER, tag VARCHAR(64), CONSTRAINT %s FOREIGN KEY (pid) REFERENCES %s(id) ON DELETE CASCADE)", child, fk, parent),
+					fmt.Sprintf("CREATE UNIQUE INDEX %s ON %s (tag)", ux, child),
+					fmt.Sprintf("CREATE INDEX %s ON %s (pid, tag)", ix, child),
+				}
+			},
+			view: func(view, table string) string {
+				return fmt.Sprintf("CREATE VIEW %s AS SELECT id, name FROM %s", view, table)
+			},
+			checkTable: func(table, constraint string) []string {
+				return []string{fmt.Sprintf("CREATE TABLE %s (id NUMBER, qty NUMBER, CONSTRAINT %s CHECK (qty > 0))", table, constraint)}
+			},
+			sequence: func(name string) []string {
+				return []string{fmt.Sprintf("CREATE SEQUENCE %s START WITH 5 MINVALUE 5 INCREMENT BY 3", name)}
+			},
+			routine: func(name string) []string {
+				return []string{fmt.Sprintf("CREATE OR REPLACE PROCEDURE %s AS BEGIN NULL; END;", name)}
+			},
+			routineKind: dbcore.RoutineProcedure,
+			partitioned: func(table string) ([]string, []string, []string) {
+				return []string{fmt.Sprintf("CREATE TABLE %s (id NUMBER, qty NUMBER) PARTITION BY RANGE (qty) (PARTITION P0 VALUES LESS THAN (10), PARTITION PMAX VALUES LESS THAN (MAXVALUE))", table)},
+					[]string{"P0", "PMAX"},
+					[]string{"DROP TABLE IF EXISTS " + table}
+			},
+			dropView:    func(v string) []string { return []string{"DROP VIEW IF EXISTS " + v} },
+			dropSeq:     func(n string) []string { return []string{"DROP SEQUENCE IF EXISTS " + n} },
+			dropRoutine: func(n string) []string { return []string{"DROP PROCEDURE IF EXISTS " + n} },
+		}
 	case dbcore.KindOracle:
 		return fixtures{
 			childTable: func(child, parent, fk, ux, ix string) []string {
@@ -229,6 +265,11 @@ func fkParentDDL(kind dbcore.DatabaseKind, name string) string {
 		return fmt.Sprintf("CREATE TABLE %s (id INT PRIMARY KEY)", name)
 	case dbcore.KindOracle:
 		return fmt.Sprintf("CREATE TABLE %s (id NUMBER PRIMARY KEY)", name)
+	case dbcore.KindDM:
+		// W14: DM rejects an FK whose column type differs from the referenced key
+		// ("引用约束不匹配", -2708), so this must be NUMBER — the fallback below is
+		// INTEGER, and the DM child fixture declares NUMBER.
+		return fmt.Sprintf("CREATE TABLE %s (id NUMBER PRIMARY KEY)", quoteBare(kind, name))
 	}
 	return fmt.Sprintf("CREATE TABLE %s (id INTEGER PRIMARY KEY)", name)
 }
@@ -243,6 +284,11 @@ func uniqueTableDDL(kind dbcore.DatabaseKind, name string) string {
 		return fmt.Sprintf("CREATE TABLE [%s] (id INT PRIMARY KEY, tag NVARCHAR(255) NOT NULL UNIQUE)", name)
 	case dbcore.KindOracle:
 		return fmt.Sprintf(`CREATE TABLE "%s" (id NUMBER PRIMARY KEY, tag VARCHAR2(255) NOT NULL UNIQUE)`, name)
+	case dbcore.KindDM:
+		// W14: the type has to be VARCHAR — DM turns TEXT into CLOB and refuses a
+		// UNIQUE index on it, which is exactly what this fixture is for. NUMBER
+		// matches the FK parent DDL so the contract table's keys agree.
+		return fmt.Sprintf("CREATE TABLE %s (id NUMBER PRIMARY KEY, tag VARCHAR(255) NOT NULL UNIQUE)", quoteBare(kind, name))
 	}
 	return fmt.Sprintf("CREATE TABLE %s (id INTEGER PRIMARY KEY, tag VARCHAR(255) NOT NULL UNIQUE)", quoteBare(kind, name))
 }
