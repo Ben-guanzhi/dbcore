@@ -27,9 +27,20 @@ const (
 	SQLite    = "sqlite"
 	SQLServer = "sqlserver"
 	Oracle    = "oracle"
+	// DM is 达梦 DM8. It is a KNOWN engine with a known dialect (Oracle's quoting,
+	// ":n" binds and ROWNUM), but not a connectable one: DM speaks its own wire
+	// protocol, which no vendored driver implements, so the client refuses to open
+	// a connection and says why. Listing it here is what keeps `dm` from falling
+	// into the "unknown engine" branch and producing a confusing error.
+	DM = "dm"
 )
 
-// Engines lists every identifier the package knows how to generate for.
+// Engines lists every identifier the package knows how to generate for — the
+// fully supported set. DM is deliberately absent: its DIALECT is known (quoting,
+// ":n" binds, ROWNUM) but its DDL generators have never been checked against a
+// server, and this list is a promise ("every listed engine answers every
+// operation", enforced by TestEveryEngineAnswersEveryOperation). Listing DM would
+// turn an unverified guess into a contract other packages rely on.
 var Engines = []string{MySQL, Postgres, SQLite, SQLServer, Oracle}
 
 // QuoteIdent quotes an identifier the way the engine parses it: MySQL wants
@@ -293,7 +304,10 @@ func Placeholder(dbType string, idx int) string {
 		return fmt.Sprintf("$%d", idx)
 	case SQLServer:
 		return fmt.Sprintf("@p%d", idx)
-	case Oracle:
+	case Oracle, DM:
+		// DM8 in Oracle-compatibility mode binds with ":n", like Oracle. This is a
+		// DIALECT fact, not a catalog claim: it is the one DM spelling that has to
+		// match here or every generated statement would be rejected.
 		return fmt.Sprintf(":%d", idx)
 	default:
 		return "?"

@@ -77,6 +77,24 @@ func init() {
 		DefaultSchema:  defaultSchemaIdentity,
 		KeysetEnabled:  false,
 	}
+
+	// DM (达梦 DM8) in its default Oracle-compatibility mode takes the same
+	// identifier quoting, ":n" binds and ROWNUM row limiting as Oracle, so the
+	// DIALECT is shared. The data dictionary is NOT: DM's catalog objects are its
+	// own, so the catalog recipes keep asking for Oracle only and a DM connection
+	// never reaches them (it cannot be opened — see the engine's connect refusal in
+	// the client, which names the missing driver).
+	dialects[DM] = &Dialect{
+		QuoteIdent:     quoteIdentDouble,
+		QuoteLiteral:   quoteLiteralPlain,
+		RowLimit:       rowLimitOracle,
+		Truncate:       truncateTRUNCATE,
+		LocalName:      localNameBare,
+		QualifiedTable: qualifiedTableBare,
+		CatalogSchema:  catalogSchemaIdentity,
+		DefaultSchema:  defaultSchemaIdentity,
+		KeysetEnabled:  false,
+	}
 }
 
 // QuoteIdent helpers
@@ -442,6 +460,8 @@ func Normalize(dbType string) string {
 		return Postgres
 	case "sqlserver", "mssql", "sql server":
 		return SQLServer
+	case "dameng", "dm8", "dm7", "dm6":
+		return DM
 	}
 	return strings.ToLower(strings.TrimSpace(dbType))
 }
