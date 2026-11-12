@@ -29,6 +29,10 @@ const (
 	KindMSSQL    DatabaseKind = "mssql"
 	KindOracle   DatabaseKind = "oracle"
 	KindRedis    DatabaseKind = "redis"
+	// KindDM is 达梦 DM8 (W14). It has its own wire protocol, so it needs its own
+	// driver package; its SQL dialect is Oracle's because DM8's default
+	// compatibility mode is Oracle's.
+	KindDM DatabaseKind = "dm"
 )
 
 // Error codes (contract §6: error codes must be unified across consumers).
