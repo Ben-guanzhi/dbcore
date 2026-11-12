@@ -186,6 +186,10 @@ type EffectFrame struct {
 	Payload  json.RawMessage `json:"payload,omitempty"`
 	Inverse  string          `json:"inverse"`
 	Boundary BoundaryClass   `json:"boundary"`
+	// Done terminates the load iterator (Def 17's Nothing): the host stops
+	// requesting stages and finalises the activation. A stage with Done=false
+	// must carry a full effect; a Done frame carries no effect at all.
+	Done bool `json:"done,omitempty"`
 	// Seq is host-assigned on acceptance, not by the plugin: a monotone allocator
 	// is not rewound (Thm 68's bound), but the sequence is an ACQUISITION ledger,
 	// not an externally published address, so it stays inside the boundary.
