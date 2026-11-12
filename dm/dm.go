@@ -1,4 +1,4 @@
-// Package dm is the 达梦 DM8 driver (W14).
+﻿// Package dm is the 达梦 DM8 driver (W14).
 //
 // DM8 speaks its own wire protocol, so it needs its own driver — the Oracle driver
 // cannot open it even though the SQL is (mostly) Oracle's. The driver used here is
@@ -94,8 +94,26 @@ func (d *DMDriver) AsKV() (dbcore.KVDriver, bool)           { return nil, false 
 func (d *DMDriver) Dialect() dbcore.Dialect                 { return d.dialect }
 
 // Execute runs one statement and returns its result.
+//
+// Reads go through QueryContext and writes through ExecContext, the way every
+// other driver here does it. DM makes this mandatory rather than merely tidy: its
+// driver refuses a non-query statement sent as a query with
+// "Error 9005: 非查询SQL语句", which a live test caught — the same call on SQLite or
+// MySQL happens to work, so the split is easy to forget.
 func (d *DMDriver) Execute(ctx context.Context, query string, args ...dbcore.Value) (*dbcore.QueryResult, error) {
-	return dbcore.RunQuery(ctx, d.db, query, args)
+	if dbcore.IsReadQuery(query) {
+		res, err := dbcore.RunQuery(ctx, d.db, query, args)
+		if err != nil {
+			return nil, err
+		}
+		coerceNumericText(res)
+		return res, nil
+	}
+	affected, lastID, err := dbcore.RunExec(ctx, d.db, query, args)
+	if err != nil {
+		return nil, err
+	}
+	return &dbcore.QueryResult{AffectedRows: affected, LastInsertID: lastID}, nil
 }
 
 // Begin opens a transaction with the requested isolation level.
@@ -166,7 +184,7 @@ func (d *DMDriver) ListTables(ctx context.Context, schema string) ([]dbcore.Tabl
 		if strings.EqualFold(r[2].S, "VIEW") {
 			kind = "view"
 		}
-		info := dbcore.TableInfo{Schema: r[0].S, Name: r[1].S, Type: kind, Comment: r[3].S, Rows: r[4].I}
+		info := dbcore.TableInfo{Schema: r[0].S, Name: r[1].S, Type: kind, Comment: r[3].S, Rows: intOf(r[4])}
 		info.ApproxRows = kind == "table" && info.Rows >= 0
 		out = append(out, info)
 	}
@@ -179,7 +197,8 @@ func (d *DMDriver) ListColumns(ctx context.Context, schema, table string) ([]dbc
 	if err != nil {
 		return nil, err
 	}
-	q, a := oracleRecipe(dbcore.CatalogColumns, s, table)
+	q := columnsRecipe(s, table)
+	var a []dbcore.Value
 	res, err := dbcore.RunQuery(ctx, d.db, q, a)
 	if err != nil {
 		return nil, err
@@ -191,10 +210,10 @@ func (d *DMDriver) ListColumns(ctx context.Context, schema, table string) ([]dbc
 			Table:           table,
 			Type:            r[1].S,
 			Nullable:        r[2].S == "Y",
-			IsPrimaryKey:    r[4].I != 0,
+			IsPrimaryKey:    intOf(r[4]) != 0,
 			Comment:         r[5].S,
-			OrdinalPosition: int32(r[6].I),
-			IsAutoIncrement: r[7].I != 0,
+			OrdinalPosition: int32(intOf(r[6])),
+			IsAutoIncrement: intOf(r[7]) != 0,
 		}
 		if r[3].Kind == dbcore.ValText && r[3].S != "" {
 			def := r[3].S
@@ -239,8 +258,8 @@ func (d *DMDriver) ListIndexes(ctx context.Context, schema, table string) ([]dbc
 		}
 		index[name] = len(out)
 		info := dbcore.IndexInfo{
-			Name: name, Kind: r[3].S, Unique: r[1].I != 0,
-			Primary: r[4].I != 0, Method: r[5].S,
+			Name: name, Kind: r[3].S, Unique: intOf(r[1]) != 0,
+			Primary: intOf(r[4]) != 0, Method: r[5].S,
 			Parts: []dbcore.IndexPart{part},
 		}
 		if part.Column != "" {
@@ -364,6 +383,7 @@ func (d *DMDriver) BrowseRows(ctx context.Context, schema, table string, req *db
 	if err != nil {
 		return nil, err
 	}
+	coerceNumericText(res)
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
 	cq, ca := d.dialect.BuildCountQuery(s, table, req)
 	// The count is best-effort: a permission failure must not hide the rows the

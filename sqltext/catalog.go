@@ -37,6 +37,10 @@ func DatabasesQuery(dbType string) (string, error) {
 		return "", nil
 	case SQLServer:
 		return "SELECT name FROM sys.databases ORDER BY name", nil
+	case DM:
+		// W14: DM has no v$database; one instance is one database, and what a user
+		// calls "the database" there is a schema (see SchemasQuery).
+		return "", nil
 	case Oracle:
 		return "SELECT name FROM v$database ORDER BY name", nil
 	default:
@@ -65,14 +69,15 @@ func SchemasQuery(dbType, database string) (string, error) {
 		return `SELECT nspname FROM pg_namespace
 			WHERE nspname NOT LIKE 'pg\_%' AND nspname <> 'information_schema'
 			ORDER BY nspname`, nil
+	case Oracle, DM:
+		// W14: verified against a live DM8 — ALL_USERS answers with the same shape.
+		return `SELECT username FROM all_users ORDER BY username`, nil
 	default:
 		// mysql uses the database as its schema, sqlite has a single main schema,
 		// oracle is introspected through the connected user.
 		return "", nil
 	}
 }
-
-// TablesQuery returns the catalog statement that lists tables and views.
 func TablesQuery(dbType, database, schema, exact string, insensitive bool) (string, []interface{}, error) {
 	dbType = Normalize(dbType)
 	switch dbType {
@@ -128,7 +133,9 @@ func TablesQuery(dbType, database, schema, exact string, insensitive bool) (stri
 		return fmt.Sprintf(`SELECT TABLE_NAME, TABLE_TYPE, '' FROM %s.INFORMATION_SCHEMA.TABLES
 			WHERE TABLE_SCHEMA = %s%s ORDER BY TABLE_NAME`, name,
 			QuotedLiteral(dbType, schema), NamePredicate(dbType, "TABLE_NAME", exact, insensitive)), nil, nil
-	case Oracle:
+	case Oracle, DM:
+		// W14: DM8's Oracle-compatible mode exposes ALL_OBJECTS with the same
+		// columns; a live instance confirmed this arm answers unchanged.
 		return `SELECT OBJECT_NAME, OBJECT_TYPE, '' FROM ALL_OBJECTS
 			WHERE OBJECT_TYPE IN ('TABLE', 'VIEW') AND OWNER = USER` +
 			NamePredicate(dbType, "OBJECT_NAME", exact, insensitive) + ` ORDER BY OBJECT_NAME`, nil, nil
@@ -196,7 +203,7 @@ func ColumnsQuery(dbType, database, schema, table string) (string, []interface{}
 			WHERE c.TABLE_NAME = %s AND c.TABLE_SCHEMA = %s
 			ORDER BY c.ORDINAL_POSITION`, comment, name, name, name, QuotedLiteral(SQLServer, table), QuotedLiteral(SQLServer, schema))
 		return query, nil, nil
-	case Oracle:
+	case Oracle, DM:
 		// ALL_TAB_COLUMNS carries no COMMENTS column — the live driver joins
 		// ALL_COL_COMMENTS the same way. The PK subquery pins OWNER too:
 		// constraint names are only unique per schema, so a cross-schema
@@ -274,7 +281,8 @@ func IndexesQuery(dbType, database, schema, table string) (string, []interface{}
 			WHERE i.object_id = OBJECT_ID(%s) AND i.is_hypothetical = 0
 			ORDER BY i.name, ic.key_ordinal`, quoted, quoted, quoted, literal)
 		return query, nil, nil
-	case Oracle:
+	case Oracle, DM:
+		// W14: verified against a live DM8 — ALL_INDEXES / ALL_IND_COLUMNS answer.
 		return fmt.Sprintf(`SELECT i.index_name, i.index_type,
 			CASE WHEN i.uniqueness = 'UNIQUE' THEN 1 ELSE 0 END,
 			CASE WHEN EXISTS (SELECT 1 FROM ALL_CONSTRAINTS ac
@@ -349,7 +357,8 @@ func ForeignKeysQuery(dbType, database, schema, table string) (string, []interfa
 			ORDER BY fk.name, fkc.constraint_column_id`,
 			quoted, quoted, quoted, quoted, quoted, quoted, literal)
 		return query, nil, nil
-	case Oracle:
+	case Oracle, DM:
+		// W14: verified against a live DM8 — ALL_CONSTRAINTS / ALL_CONS_COLUMNS answer.
 		return fmt.Sprintf(`SELECT ac.constraint_name, cc.column_name, rac.owner, rac.table_name,
 			rcc.column_name, ac.delete_rule, ''
 			FROM ALL_CONSTRAINTS ac
