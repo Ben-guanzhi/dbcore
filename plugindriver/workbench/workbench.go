@@ -152,8 +152,16 @@ const (
 	// plugin predating it answers ERR_NOT_SUPPORTED and the host keeps the
 	// terminal-only surface.
 	MethodFilesAction = "workbench/files/action"
-	MethodProxy       = "workbench/proxy"
-	MethodSecret      = "workbench/secret"
+	// MethodProxyRequest is W-C1's coeffect access over the wire (§5.1.4's
+	// get-trap at the protocol boundary): a plugin asks for a key it DECLARED,
+	// and the HOST answers with a proxy_value frame carrying the resolved value.
+	// The host resolves against the accessing fiber's committed view — a key not
+	// in d is refused (UNDECLARED_ACCESS), a declared-but-inactive fiber is
+	// refused (INACTIVE_ACCESS). Bare store lookups never cross this boundary.
+	MethodProxyRequest = "workbench/proxy/request"
+	MethodProxyValue   = "workbench/proxy/value"
+	MethodProxy        = "workbench/proxy"
+	MethodSecret       = "workbench/secret"
 )
 
 // BoundaryClass is §6.1's acquisition / emission split.
@@ -220,6 +228,18 @@ type ProxyRequest struct {
 	Key  string          `json:"key"`
 	Op   string          `json:"op"`
 	Args json.RawMessage `json:"args,omitempty"`
+}
+
+// ProxyValue is the host's answer to a proxy request, sent as a PUSH frame
+// (method workbench/proxy/value) whose ID matches the request's. Value is the
+// resolved binding (a table entry, a ring, whatever the provider published) —
+// opaque JSON, interpreted by the PLUGIN that declared the dependency, never by
+// the host.
+type ProxyValue struct {
+	Key    string          `json:"key"`
+	Value  json.RawMessage `json:"value,omitempty"`
+	Err    string          `json:"err,omitempty"`
+	Code   string          `json:"code,omitempty"`
 }
 
 // SecretLend is AD-4's reversible borrow. Value is deliberately NOT part of the
