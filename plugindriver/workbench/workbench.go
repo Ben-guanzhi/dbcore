@@ -236,18 +236,33 @@ type ProxyRequest struct {
 // opaque JSON, interpreted by the PLUGIN that declared the dependency, never by
 // the host.
 type ProxyValue struct {
-	Key    string          `json:"key"`
-	Value  json.RawMessage `json:"value,omitempty"`
-	Err    string          `json:"err,omitempty"`
-	Code   string          `json:"code,omitempty"`
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value,omitempty"`
+	Err   string          `json:"err,omitempty"`
+	Code  string          `json:"code,omitempty"`
 }
 
-// SecretLend is AD-4's reversible borrow. Value is deliberately NOT part of the
-// frame: the host writes it over a separate stdin pipe and registers an erasing
-// inverse; this struct only acknowledges which names were lent.
+// SecretLend is AD-4's reversible borrow. The VALUE is deliberately not part of
+// this frame: the host writes it as a RAW BODY immediately after the JSON line
+// (Bytes of them, no newline, never JSON-escaped), so no secret ever crosses the
+// envelope. The plugin answers with an acknowledgement naming what it took, and
+// the host's accumulator holds the erasing inverse.
+//
+// One frame serves both directions:
+//   - host → plugin (a lend): Name + Bytes describe the raw body that follows;
+//   - plugin → host (the ack):  Names lists what the vault accepted.
 type SecretLend struct {
 	Names []string `json:"names"`
+	// Name is the ONE secret being lent in this frame (host → plugin).
+	Name string `json:"name,omitempty"`
+	// Bytes is the exact length of the raw body that follows the line. The
+	// reader consumes exactly this many bytes, so the next line is a line again.
+	Bytes int `json:"bytes,omitempty"`
 }
+
+// MaxSecretBytes bounds one lend. A secret is a password or a key; anything
+// larger is a protocol error, not a big password.
+const MaxSecretBytes = 64 * 1024
 
 // Disjoint discharges Thm 47's only remaining obligation: P1 ∩ S2 = P2 ∩ S1 = ⌀.
 // With every provided key witnessed commutative (checked by Validate), a pair of
