@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "comment": "交互设计契约（S-02/S-03/S-05，SIMS 213：Raskin 模式与统一撤销、Cooper 防错、Sullivan 可测）。三条规则各自声明 [gesture|surface|status] 形态与按客户端分面的现状基线（current），现状是 2026-11-13 审计的实测结果；改动现状必须先改这里，让'设计 drift'像代码 drift 一样被测试抓住。",
+  "rules": [
+    {
+      "id": "single-undo-gesture",
+      "source": "Raskin, The Humane Interface ch3（Habituation / universal undo）",
+      "rule": "Ctrl/Cmd+Z 在所有上下文都指向'当前焦点的撤销'：文本焦点走文本栈，网格焦点走该客户端的撤销语义（撤销栈 / 工作副本回滚 / 单步 revert）。同一手势不得在不同面板做无关的事；Esc 永远是'退出当前状态'。",
+      "gesture": "Ctrl+Z（macOS Cmd+Z）；redo = Ctrl+Shift+Z / Cmd+Shift+Z",
+      "clients": {
+        "sqlgpui": "done — ctrl-z → UndoEdit（网格 revert），ctrl-shift-z → RedoEdit，焦点在文本控件时由编辑器接管（main.rs:75）",
+        "tableprogo": "partial — 网格撤销是按钮（DataGrid.tsx:1326，title 已写 Ctrl+Z 但键未绑定）；编辑器文本撤销已有",
+        "dbstudio": "partial — 工作副本回滚有按钮与菜单（edit.go:230 rollback），无 Ctrl+Z；编辑器文本撤销由 mygo 编辑器自带",
+        "fynequery": "partial — 单格 revert（edit.go:130），无手势；编辑器文本撤销 Fyne 自带",
+        "sqltui": "gap — 无网格撤销；事务回滚是唯一退路",
+        "polydb": "per-frontend — Web 端跟随 TableProGo 形态"
+      }
+    },
+    {
+      "id": "nonblocking-feedback",
+      "source": "Raskin ch3（locus of attention）+ Cooper（错误要在原地可修）",
+      "rule": "错误与成功默认走**非模态**通道（状态栏 / 消息区 / toast）；模态只保留两类：需要用户决策才能继续的（确认破坏性操作），以及必须打断的（连接向导）。错误文案必须可复制（含 SQLSTATE/原始消息），不允许只有'操作失败'。",
+      "surface": "状态栏 / Messages 区 / toast；模态仅限 confirm 与向导",
+      "clients": {
+        "dbstudio": "done — Messages 页签 + 状态栏（app.go:87），错误带 Retry",
+        "tableprogo": "done — toast 229 处 + 错误可复制",
+        "sqltui": "done — toast 131 + 错误弹出层",
+        "polydb": "done — toast 81",
+        "db-dev": "done — 状态栏",
+        "fynequery": "gap — dialog.ShowError 式模态（workspace.go:882/900/918 的 tx 错误、dbpicker.go:281）；statusBar 已存在（widgets.go:1246）可承载"
+      }
+    },
+    {
+      "id": "persistent-mode-signal",
+      "source": "Raskin ch2（mode error 是最坏的用户错误）",
+      "rule": "会话级模式（autocommit 关 / 事务活跃 / 只读连接 / Safe Mode）必须在**常驻可视位置**（状态栏或标题栏）持续可见，且不得只用颜色——必须配文本或图标（对齐 a11y-baseline 的 no-color-only-signal）。",
+      "status": "状态栏常驻段：engine · schema · tx · rows · mode",
+      "clients": {
+        "dbstudio": "done — 状态栏报 connection/schema/engine/tx/rows + 工具栏 Autocommit 开关 + 只读锁（readonly.go）+ colorBand",
+        "tableprogo": "done — 事务徽章 + 倒计时 + Safe Mode 指示",
+        "polydb": "done — 连接健康灯 + 徽章",
+        "db-dev": "partial — 状态栏有部分模式",
+        "fynequery": "partial — statusBar 有 rows/table/columns（widgets.go:1264-1283），无 tx/mode 段",
+        "sqltui": "partial — 状态栏有连接名，模式靠提示"
+      }
+    }
+  ]
+}
