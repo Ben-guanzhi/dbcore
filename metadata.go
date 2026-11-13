@@ -471,6 +471,22 @@ type EnumTypeInfo struct {
 	Labels []string
 }
 
+// TriggerInfo is one trigger of a table, as TriggerLister reports it.
+//
+// Timing and Event are the engine's own spellings (BEFORE/AFTER/INSTEAD OF,
+// INSERT/UPDATE/DELETE): translating them would only add a mapping to get
+// wrong, and a user reading a trigger wants the engine's vocabulary. Enabled is
+// the engine's status spelling, empty where the engine reports none.
+//
+// It lives here rather than in sqltext (which first defined it) so the catalog
+// types a driver returns stay in one place, as every other metadata row does.
+type TriggerInfo struct {
+	Name    string
+	Timing  string
+	Event   string
+	Enabled string
+}
+
 // InvalidObject is one catalog object Oracle reports as INVALID (W9).
 //
 // Type is Oracle's own spelling ("PROCEDURE", "PACKAGE BODY", "VIEW", …): it is

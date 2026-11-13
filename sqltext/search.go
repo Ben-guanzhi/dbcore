@@ -26,6 +26,15 @@ func SearchObjectsQuery(dbType, database, fragment string, limit int) (string, [
 	pattern := LikePattern(fragment)
 	switch Normalize(dbType) {
 	case MySQL:
+		// An empty database means "every schema the user can see": the search
+		// box narrows to one schema only when the user picked one, otherwise a
+		// table in any of a server's many databases would never be found.
+		if database == "" {
+			return fmt.Sprintf(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
+				FROM information_schema.TABLES
+				WHERE TABLE_NAME LIKE ? ORDER BY TABLE_SCHEMA, TABLE_NAME LIMIT %d`, limit),
+				[]interface{}{pattern}, nil
+		}
 		return fmt.Sprintf(`SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
 			FROM information_schema.TABLES
 			WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE ? ORDER BY TABLE_NAME LIMIT %d`, limit),

@@ -176,7 +176,17 @@ func rowLimitLimit(query string, limit int) string {
 		// one to WITH ... INSERT/UPDATE/DELETE truncates the write (MySQL and
 		// PostgreSQL accept the spelling). The SQL Server arm has the same
 		// guard through cteOuterIsRead.
-		if cteOuterIsRead(trimmed) {
+		//
+		// The verdict runs on `lead`, the same trivia-stripped text the
+		// classification above used. A statement wrapped in leading
+		// parentheses keeps its outer keyword at paren depth 2 in the raw
+		// text, where the scan reported "no statement at depth 0" and left
+		// every paren-wrapped read uncapped. The appending dialects carry the
+		// cap for those (verified against MySQL and PostgreSQL servers); the
+		// wrap arms below keep the raw scan, because their shapes add parens
+		// of their own and a paren-wrapped WITH has not been shown legal
+		// inside them.
+		if cteOuterIsRead(lead) {
 			return fmt.Sprintf("%s LIMIT %d", trimmed, limit)
 		}
 		return query
@@ -278,9 +288,24 @@ func cteOuterIsRead(s string) bool {
 				i++
 			}
 		case c == '[':
-			// Bracket-quoted identifier (SQL Server [delete]).
+			// Bracket-quoted identifier (SQL Server [delete]). A doubled ]]
+			// is the escaped literal ] — quoteIdentSQLServer emits it that
+			// way — so the scan consumes it as part of the name, the same
+			// way the double-quote branch above consumes "". Stopping at the
+			// first ] exposed a keyword spelled inside an identifier at
+			// depth 0: the CTE name [a]]DELETE] (the name a]DELETE) read as
+			// "non-read" and lost its cap, and [a]]SELECT] over a
+			// data-modifying CTE read as a read and was wrapped into a
+			// statement that cannot execute.
 			i++
-			for i < len(s) && s[i] != ']' {
+			for i < len(s) {
+				if s[i] == ']' {
+					if i+1 < len(s) && s[i+1] == ']' {
+						i += 2
+						continue
+					}
+					break
+				}
 				i++
 			}
 			i++

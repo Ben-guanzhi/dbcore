@@ -782,3 +782,67 @@ func TestDiffDeterminismAcrossInputOrder(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// TestPhaseTableIsLinearExtension pins the phase constants as a linear
+// extension of the dependency DAG the plan's ordering assumes (ch22.3: a valid
+// execution order is a linear extension of the dependency partial order). The
+// table is hand-maintained — a new Op or a renumber that breaks one of the
+// edges below lets a plan name a statement before the object it needs exists.
+// Every edge here is a real dependency, annotated with the failure it guards.
+func TestPhaseTableIsLinearExtension(t *testing.T) {
+	phases := map[Op]int{
+		OpDropForeignKey: PhaseDropForeignKey,
+		OpDropIndex:      PhaseDropIndex,
+		OpDropPrimaryKey: PhaseDropPrimaryKey,
+		OpDropTable:      PhaseDropTable,
+		OpCreateTable:    PhaseCreateTable,
+		OpDropColumn:     PhaseDropColumn,
+		OpAddColumn:      PhaseAddColumn,
+		OpAlterColumn:    PhaseAlterColumn,
+		OpAddPrimaryKey:  PhaseAddPrimaryKey,
+		OpCreateIndex:    PhaseCreateIndex,
+		OpAddForeignKey:  PhaseAddForeignKey,
+	}
+	if len(phases) != 11 {
+		t.Fatalf("phase table covers %d ops, want 11", len(phases))
+	}
+	// The extension is total: no two ops share a phase, so the plan order is
+	// decided by the phase alone and never left to entry order.
+	seen := map[int]Op{}
+	for op, p := range phases {
+		if other, clash := seen[p]; clash {
+			t.Errorf("%s and %s share phase %d", op, other, p)
+		}
+		seen[p] = op
+	}
+	edges := []struct {
+		before, after Op
+		why           string
+	}{
+		// A referenced table cannot be dropped while a referencing FK lives on
+		// a table that survives: the FK must come off first.
+		{OpDropForeignKey, OpDropTable, "the FK on a surviving referencing table must drop before the referenced table"},
+		// An FK covering a column the plan drops has to come off first.
+		{OpDropForeignKey, OpDropColumn, "an FK covering the dropped column must drop before it"},
+		// Same for an index over the dropped column: the plan owns every
+		// statement it emits, it cannot lean on the engine's cascade.
+		{OpDropIndex, OpDropColumn, "an index covering the dropped column must drop before it"},
+		// An FK's referenced table must exist before the FK is built.
+		{OpCreateTable, OpAddForeignKey, "the FK target table must exist before the FK is built"},
+		// A secondary index is built over the created table.
+		{OpCreateTable, OpCreateIndex, "the index target table must exist"},
+		// Indexes and FKs are built over settled columns.
+		{OpAddColumn, OpCreateIndex, "the index must build over the added column after it exists"},
+		{OpAddColumn, OpAddForeignKey, "the FK must build over the added column after it exists"},
+		{OpAlterColumn, OpCreateIndex, "the index must build over the altered column after it settles"},
+		{OpAlterColumn, OpAddForeignKey, "the FK must build over the altered column after it settles"},
+		// An FK's referenced side has to be keyed before the FK is built.
+		{OpAddPrimaryKey, OpAddForeignKey, "the FK's referenced column must be keyed first"},
+	}
+	for _, e := range edges {
+		if phases[e.before] >= phases[e.after] {
+			t.Errorf("phase(%s)=%d must be < phase(%s)=%d: %s",
+				e.before, phases[e.before], e.after, phases[e.after], e.why)
+		}
+	}
+}

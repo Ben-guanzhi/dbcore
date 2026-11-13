@@ -24,6 +24,33 @@ func TestSearchObjectsQueryBindsPatternWhereDriverSupportsIt(t *testing.T) {
 	}
 }
 
+// An empty database must not pin the search to one schema: on a server with
+// many schemas that is exactly the case where a table cannot be found.
+func TestSearchObjectsQueryWithoutDatabaseSearchesEverySchema(t *testing.T) {
+	q, args, err := SearchObjectsQuery(MySQL, "", "order", 20)
+	if err != nil {
+		t.Fatalf("MySQL: %v", err)
+	}
+	if strings.Contains(q, "TABLE_SCHEMA = ?") {
+		t.Fatalf("an unscoped search still filters by schema:\n%s", q)
+	}
+	if len(args) != 1 {
+		t.Fatalf("args = %v, want just the pattern", args)
+	}
+	// Ordering by schema keeps a many-schema result readable.
+	if !strings.Contains(q, "TABLE_SCHEMA, TABLE_NAME") {
+		t.Errorf("the unscoped search is not ordered by schema: %s", q)
+	}
+	// A chosen schema still narrows it.
+	q, args, err = SearchObjectsQuery(MySQL, "gs_prod", "order", 20)
+	if err != nil {
+		t.Fatalf("MySQL scoped: %v", err)
+	}
+	if !strings.Contains(q, "TABLE_SCHEMA = ?") || len(args) != 2 {
+		t.Fatalf("a scoped search did not filter by schema: %s %v", q, args)
+	}
+}
+
 func TestSearchObjectsQueryInlinesLiteralForMSSQLAndOracle(t *testing.T) {
 	for _, dbType := range []string{SQLServer, Oracle} {
 		q, args, err := SearchObjectsQuery(dbType, "app", "ord", 10)

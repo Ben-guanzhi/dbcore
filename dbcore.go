@@ -411,8 +411,12 @@ func (m *TxManager) Info(id string) (*TransactionInfo, error) {
 	return &TransactionInfo{ID: id, Status: e.status}, nil
 }
 
-// Close stops the sweeper (idempotent).
+// Close reclaims every open transaction — a teardown applies the manager's
+// accumulated inverse (RollbackAll), which is the unload's whole effect — and
+// stops the idle sweeper. Idempotent: a second Close sees an empty registry
+// and a closed channel.
 func (m *TxManager) Close() {
+	m.RollbackAll()
 	m.closeOne.Do(func() { close(m.done) })
 }
 

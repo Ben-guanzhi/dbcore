@@ -865,3 +865,35 @@ func TestTrimPartialRuneBinaryGarbage(t *testing.T) {
 		t.Fatalf("cut rune = %q, want the partial bytes dropped", got)
 	}
 }
+
+// The set window must hold at most MaxEntries members even when one SSCAN
+// batch carries more: SCAN's COUNT is only a hint, and a server that
+// over-returns in a single round must not blow the window. The hash sibling
+// has always enforced this bound inline; absorbSetBatch now carries it for
+// sets, and this test exercises the cap directly with a synthetic oversized
+// batch — miniredis caps SSCAN at the hint, so the end-to-end collection test
+// cannot produce the overshoot.
+func TestAbsorbSetBatchCapsAtMax(t *testing.T) {
+	seen := map[string]struct{}{}
+	window := absorbSetBatch(nil, []string{"a", "b", "c", "d"}, seen, 2)
+	if len(window) != 2 || window[0] != "a" || window[1] != "b" {
+		t.Fatalf("oversized batch = %v, want capped at [a b]", window)
+	}
+	// Dedup applies before the cap: an already-seen member neither occupies a
+	// window slot nor counts toward it.
+	seen = map[string]struct{}{"a": {}}
+	window = absorbSetBatch(nil, []string{"a", "b"}, seen, 2)
+	if len(window) != 1 || window[0] != "b" {
+		t.Fatalf("dedup against seen = %v, want [b]", window)
+	}
+	// A batch smaller than the room left is absorbed whole.
+	window = absorbSetBatch(nil, []string{"x", "y"}, map[string]struct{}{}, 5)
+	if len(window) != 2 || window[0] != "x" || window[1] != "y" {
+		t.Fatalf("small batch = %v, want [x y]", window)
+	}
+	// An exactly-full window admits nothing more.
+	window = absorbSetBatch([]string{"a", "b"}, []string{"c"}, map[string]struct{}{}, 2)
+	if len(window) != 2 {
+		t.Fatalf("full window grew to %v", window)
+	}
+}

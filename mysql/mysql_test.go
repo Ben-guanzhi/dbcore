@@ -130,7 +130,7 @@ func TestQuotePlaceholderAndPaging(t *testing.T) {
 func TestCatalogQueriesExposeMetadata(t *testing.T) {
 	d := MySQLDialect{}
 	cases := map[dbcore.CatalogKind][]string{
-		dbcore.CatalogTables:      {"TABLE_COMMENT", "TABLE_ROWS"},
+		dbcore.CatalogTables:      {"TABLE_COMMENT", "information_schema.TABLES"},
 		dbcore.CatalogColumns:     {"COLUMN_KEY", "COLUMN_COMMENT"},
 		dbcore.CatalogIndexes:     {"'primary'", "'unique'", "EXPRESSION", "INDEX_TYPE", "COLLATION"},
 		dbcore.CatalogForeignKeys: {"REFERENTIAL_CONSTRAINTS", "DELETE_RULE", "UPDATE_RULE"},
@@ -142,6 +142,18 @@ func TestCatalogQueriesExposeMetadata(t *testing.T) {
 				t.Errorf("kind %d missing %q: %s", kind, want, q)
 			}
 		}
+	}
+}
+
+// The table list must not select TABLE_ROWS: that column makes the server
+// compute InnoDB statistics, which open every table of the schema and turned
+// the catalog read into a 30s+ stall on large schemas (the client does not even
+// use the estimate). Row counts are read per table by TableRows instead.
+func TestCatalogTablesAvoidsRowEstimate(t *testing.T) {
+	d := MySQLDialect{}
+	q, _ := d.CatalogQuery(dbcore.CatalogTables, "gs_prod", "")
+	if strings.Contains(q, "TABLE_ROWS") {
+		t.Fatalf("CatalogTables selects TABLE_ROWS, which forces a stats dive:\n%s", q)
 	}
 }
 

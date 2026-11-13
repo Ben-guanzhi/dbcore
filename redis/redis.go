@@ -453,18 +453,32 @@ func scanSetWindow(ctx context.Context, c *goredis.Client, key string, max int64
 		if err != nil {
 			return nil, err
 		}
-		for _, m := range batch {
-			if _, dup := seen[m]; dup {
-				continue
-			}
-			seen[m] = struct{}{}
-			members = append(members, m)
-		}
+		members = absorbSetBatch(members, batch, seen, max)
 		if next == 0 || int64(len(members)) >= max {
 			return members, nil
 		}
 		cursor = next
 	}
+}
+
+// absorbSetBatch folds one SSCAN batch into the window, deduplicating against
+// seen and stopping at max. The cap must be enforced per member, not between
+// rounds: SCAN's COUNT is only a hint and the server may return a batch larger
+// than the room left (over-returning is spec-legal; miniredis happens to cap
+// SSCAN at the hint, which is why the end-to-end window tests cannot catch the
+// overshoot). The hash sibling enforces the same bound inline.
+func absorbSetBatch(window []string, batch []string, seen map[string]struct{}, max int64) []string {
+	for _, m := range batch {
+		if int64(len(window)) >= max {
+			return window
+		}
+		if _, dup := seen[m]; dup {
+			continue
+		}
+		seen[m] = struct{}{}
+		window = append(window, m)
+	}
+	return window
 }
 
 // scanHashWindow is scanSetWindow for hashes: HSCAN pairs flattened as

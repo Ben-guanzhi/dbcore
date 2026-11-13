@@ -16,15 +16,16 @@ package sqltext
 // complete DDL where the engine can give it (SQLite/MSSQL), name+timing+body
 // where it cannot (MySQL/PG/Oracle users get enough to read the logic).
 
-import "fmt"
+import (
+	"fmt"
 
-// TriggerInfo is one row of TriggersQuery's result.
-type TriggerInfo struct {
-	Name    string
-	Timing  string // BEFORE / AFTER / INSTEAD OF (engine spelling)
-	Event   string // INSERT / UPDATE / DELETE, engine spelling
-	Enabled string // engine spelling of the status
-}
+	"github.com/dbcore/dbcore"
+)
+
+// TriggerInfo is one row of TriggersQuery's result. It is dbcore's type: the
+// catalog rows a driver returns live in one place, and this package only spells
+// the queries that produce them.
+type TriggerInfo = dbcore.TriggerInfo
 
 // TriggersQuery returns the catalog query and its positional args listing the
 // triggers of one table. Columns come back as name, timing, event, enabled —

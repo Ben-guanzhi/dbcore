@@ -54,6 +54,11 @@ func DSN(spec dbcore.ConnSpec) string {
 	cfg.Addr = spec.Addr()
 	cfg.DBName = spec.Database
 	cfg.ParseTime = true
+	// Multiple statements in one call: what a batch or a stored procedure needs
+	// to answer with more than one result set (ExecuteMulti walks them). A
+	// statement that is one query is unaffected; the driver refuses bound
+	// arguments in a multi-statement text, which ExecuteMulti never sends.
+	cfg.MultiStatements = true
 	cfg.Timeout = spec.ConnectTimeout
 	cfg.ReadTimeout = spec.ReadTimeout
 	cfg.WriteTimeout = spec.WriteTimeout

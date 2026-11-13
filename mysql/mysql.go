@@ -135,9 +135,6 @@ func (d *MySQLDriver) ListTables(ctx context.Context, schema string) ([]dbcore.T
 			kind = "view"
 		}
 		info := dbcore.TableInfo{Schema: r[0].S, Name: r[1].S, Type: kind, Comment: r[3].S, Rows: -1}
-		if kind == "table" && r[4].Kind != dbcore.ValNull {
-			info.Rows, info.ApproxRows = r[4].I, true
-		}
 		out = append(out, info)
 	}
 	return out, nil
@@ -471,7 +468,12 @@ func (l MySQLDialect) CatalogQuery(kind dbcore.CatalogKind, schema, obj string) 
 			WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys')
 			ORDER BY SCHEMA_NAME`, nil
 	case dbcore.CatalogTables:
-		return `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_COMMENT, TABLE_ROWS
+		// TABLE_ROWS is deliberately absent: reading it makes the server
+		// compute InnoDB statistics (innodb_stats_on_metadata), which opens
+		// every table in the schema and turned a catalog read into a 30s+
+		// stall on large schemas. Callers that want a row estimate ask for it
+		// per table (TableRows) where the cost is bounded to one table.
+		return `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_COMMENT
 			FROM information_schema.TABLES
 			WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME`,
 			[]dbcore.Value{{Kind: dbcore.ValText, S: schema}}

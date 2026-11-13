@@ -119,7 +119,9 @@ func (s ConnSpec) Param(key, def string) string {
 type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // PoolConfig mirrors the four database/sql pool knobs. Zero values keep the
-// database/sql defaults, so an empty PoolConfig is always valid.
+// database/sql defaults — and database/sql reads MaxOpen = 0 as *no limit*, so
+// an empty PoolConfig is only valid for a caller that enforces its own
+// ceiling. DefaultPoolConfig is the bounded default for everyone else.
 type PoolConfig struct {
 	MaxOpen     int
 	MaxIdle     int
@@ -140,6 +142,21 @@ func (p PoolConfig) Apply(db *sql.DB) {
 	}
 	if p.MaxIdleTime > 0 {
 		db.SetConnMaxIdleTime(p.MaxIdleTime)
+	}
+}
+
+// DefaultPoolConfig is the bounded pool the workspace's clients converge on.
+// It exists because an empty PoolConfig is the dangerous default: MaxOpen = 0
+// inserts no ceiling, so a burst of UI actions opens connections without bound
+// and can exhaust the server's connection allowance (the class 11-04/round2
+// fixed one client at a time). Clients without a ceiling of their own pass
+// this to Open instead of PoolConfig{}.
+func DefaultPoolConfig() PoolConfig {
+	return PoolConfig{
+		MaxOpen:     8,
+		MaxIdle:     4,
+		MaxLifetime: 30 * time.Minute,
+		MaxIdleTime: 5 * time.Minute,
 	}
 }
 

@@ -1,0 +1,39 @@
+{
+  "comment": "目录配方契约（C3，2026-11-13）。每个引擎的 CatalogTables/CatalogColumns（及其批量变体）必须产出下列字段；测试断言生成 SQL（Go）或驱动源码去掉注释后（Rust）仍带对应表达式——C1（注释缺失）与 C2（serial 漏判）正是这些 marker 丢失造成的。字段清单是文档性的，marker 是可执行的断言。",
+  "kinds": {
+    "tables": {
+      "fields": ["name", "table_type", "comment"]
+    },
+    "columns": {
+      "fields": [
+        "name",
+        "data_type",
+        "nullable",
+        "default_value",
+        "is_primary_key",
+        "is_auto_increment",
+        "comment",
+        "ordinal_position"
+      ]
+    }
+  },
+  "engines": {
+    "postgres": {
+      "tables": ["obj_description"],
+      "columns": ["col_description", "attidentity", "nextval("],
+      "batch_columns": ["col_description", "attidentity", "nextval("]
+    },
+    "mysql": {
+      "tables": ["TABLE_COMMENT"],
+      "columns": ["COLUMN_COMMENT", "EXTRA"]
+    },
+    "mssql": {
+      "tables": ["extended_properties", "MS_Description", "minor_id = 0"],
+      "columns": ["extended_properties", "MS_Description", "minor_id"]
+    },
+    "oracle": {
+      "tables": ["all_tab_comments", "NVL("],
+      "columns": ["all_col_comments", "all_tab_identity_cols"]
+    }
+  }
+}

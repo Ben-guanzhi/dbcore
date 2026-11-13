@@ -309,10 +309,14 @@ func (d *OracleDriver) CreateTableSQL(ctx context.Context, schema, table string)
 	args := []dbcore.Value{{Kind: dbcore.ValText, S: s}, {Kind: dbcore.ValText, S: table}}
 	if res, qerr := dbcore.RunQuery(ctx, d.db,
 		`SELECT DBMS_METADATA.GET_DDL('TABLE', :1, :2) FROM dual`, args); qerr == nil && len(res.Rows) > 0 {
-		v := res.Rows[0][0]
-		ddl := strings.TrimSpace(v.S)
-		if v.Kind == dbcore.ValBlob {
-			ddl = strings.TrimSpace(string(v.B))
+		// GET_DDL's CLOB surfaces as text or a blob depending on the driver's
+		// LOB handling; try the selectors in that order instead of reading a
+		// field and fixing it up by Kind.
+		var ddl string
+		if s, ok := dbcore.TryGetString(res.Rows[0][0]); ok {
+			ddl = strings.TrimSpace(s)
+		} else if b, ok := dbcore.TryGetBlob(res.Rows[0][0]); ok {
+			ddl = strings.TrimSpace(string(b))
 		}
 		if ddl != "" {
 			return ddl, nil

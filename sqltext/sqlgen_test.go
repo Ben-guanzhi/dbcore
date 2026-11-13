@@ -332,6 +332,16 @@ func TestRowLimitDepthAwareOwnLimit(t *testing.T) {
 	if got := RowLimit(SQLServer, "SELECT TOP (9) * FROM items", 5); got != "SELECT TOP (9) * FROM items" {
 		t.Errorf("sqlserver own TOP must survive: %q", got)
 	}
+	// N1 回归：别名 [a]]LIMIT 5] 是标识符 a]LIMIT 5（quoteIdentSQLServer
+	// 把 "]" 转义成 "]]"）。ownLimitKind 停在第一个 ] 曾把其中的 LIMIT 5
+	// 当成语句自带的行限制，封顶被静默跳过。
+	if got := RowLimit(SQLServer, "SELECT * FROM items AS [a]]LIMIT 5]", 5); got != "SELECT TOP (5) * FROM items AS [a]]LIMIT 5]" {
+		t.Errorf("sqlserver bracket alias with ]] escape must be capped: %q", got)
+	}
+	// CTE 名 [a]]DELETE]（真名 a]DELETE）是读语句，必须包 TOP。
+	if got := RowLimit(SQLServer, "WITH [a]]DELETE] AS (SELECT 1) SELECT * FROM big", 5); got != "SELECT TOP (5) * FROM (WITH [a]]DELETE] AS (SELECT 1) SELECT * FROM big) AS limited" {
+		t.Errorf("sqlserver CTE name with ]] escape must be wrapped: %q", got)
+	}
 }
 
 // TestCteOuterIsReadStepsOverNonWordBytes pins the scanner's stepping: at
@@ -382,11 +392,59 @@ func TestCteOuterIsReadStepsOverNonWordBytes(t *testing.T) {
 		// MySQL 反斜杠转义：\' 不应提前闭合字符串字面量
 		{"WITH c AS (SELECT 'a\\'b' AS x) SELECT * FROM c", true},
 		{"WITH c AS (SELECT 'a\\'b') SELECT * FROM c", true},
+		// N1 回归：SQL Server 的 ]] 是字面 ] 的转义（quoteIdentSQLServer
+		// 生成侧做 "]"→"]]")，读取侧必须对称。停在第一个 ] 会把标识符内
+		// 的关键字当成 depth-0 词：CTE 名 [a]]DELETE]（真名 a]DELETE）曾
+		// 被误判"非读"而漏掉封顶；[a]]SELECT] 覆盖在数据修改 CTE 上曾被
+		// 误判"读"，包出的派生表无法执行。
+		{"WITH [a]]DELETE] AS (SELECT 1) SELECT * FROM big", true},
+		{"WITH [a]]UPDATE] AS (SELECT 1) SELECT * FROM big", true},
+		{"WITH [a]]INSERT] AS (SELECT 1) SELECT * FROM big", true},
+		{"WITH [a]]MERGE] AS (SELECT 1) SELECT * FROM big", true},
+		{"WITH [a]]SELECT] AS (INSERT INTO t VALUES (1)) SELECT 1", true},
+		// 不含关键字的 ]] 转义名与真实 DML 关键字的负例（防过修）。
+		{"WITH [x]]y] AS (SELECT 1) SELECT * FROM big", true},
+		{"WITH [a]]b] AS (SELECT 1) DELETE FROM big", false},
 	}
 	for _, tc := range cases {
 		if got := cteOuterIsRead(tc.sql); got != tc.want {
 			t.Errorf("cteOuterIsRead(%q) = %v, want %v", tc.sql, got, tc.want)
 		}
+	}
+}
+
+// TestRowLimitParenWrappedWith pins the WITH branch's verdict running on the
+// trivia-stripped text: a statement wrapped in leading parentheses keeps its
+// outer keyword at paren depth 2 in the raw scan, which reported "no statement
+// at depth 0" and left every paren-wrapped read uncapped. The appending
+// dialects cap them; the wrap dialects (SQL Server, Oracle) deliberately keep
+// the raw scan, because their cap shapes add parens of their own and a
+// paren-wrapped WITH has not been shown legal inside them.
+func TestRowLimitParenWrappedWith(t *testing.T) {
+	wrapped := "((WITH c AS (SELECT 1) SELECT * FROM c))"
+	for _, engine := range []string{MySQL, Postgres, SQLite} {
+		want := wrapped + " LIMIT 5"
+		if got := RowLimit(engine, wrapped, 5); got != want {
+			t.Errorf("%s paren-wrapped read WITH must be capped: got %q", engine, got)
+		}
+	}
+	// A data-modifying CTE stays uncapped in every spelling — the outer
+	// keyword after the paren strip is the write, and capping would truncate it.
+	for _, sql := range []string{
+		"((WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c))",
+		"(WITH c AS (SELECT 1) INSERT INTO t SELECT * FROM c)",
+	} {
+		if got := RowLimit(MySQL, sql, 5); got != sql {
+			t.Errorf("paren-wrapped DML CTE must stay uncapped: got %q", got)
+		}
+	}
+	// The wrap dialects keep the raw scan: conservative on a shape their cap
+	// has not been proven to carry.
+	if got := RowLimit(SQLServer, wrapped, 5); got != wrapped {
+		t.Errorf("sqlserver paren-wrapped WITH stays uncapped: got %q", got)
+	}
+	if got := RowLimit(Oracle, wrapped, 5); got != wrapped {
+		t.Errorf("oracle paren-wrapped WITH stays uncapped: got %q", got)
 	}
 }
 
@@ -438,7 +496,7 @@ func TestFKValuesQuery(t *testing.T) {
 		t.Error("FKValuesQuery must reject limit<=0")
 	}
 	got, _ := FKValuesQuery(MySQL, "`r`", "k", "label", 10)
-	if got != "SELECT DISTINCT `k`, `label` FROM `r` ORDER BY `k` LIMIT 10" {
+	if got != "SELECT DISTINCT `k`, `label` FROM `r` WHERE `k` IS NOT NULL ORDER BY `k` LIMIT 10" {
 		t.Errorf("mysql fk values: %q", got)
 	}
 	got, _ = FKValuesQuery(Oracle, "R", "K", "", 10)

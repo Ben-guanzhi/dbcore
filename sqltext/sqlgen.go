@@ -207,8 +207,21 @@ func ownLimitKind(query string) string {
 				i++
 			}
 		case c == '[':
+			// Bracket-quoted identifier. A doubled ]] is the escaped literal
+			// ] (quoteIdentSQLServer emits "]" that way) and is part of the
+			// name, so the scan consumes it: an identifier such as
+			// [a]]LIMIT 5] (the name a]LIMIT 5) must not hand the scanner a
+			// bare LIMIT followed by a count, which read as the statement's
+			// own row limit and skipped the cap.
 			i++
-			for i < n && query[i] != ']' {
+			for i < n {
+				if query[i] == ']' {
+					if i+1 < n && query[i+1] == ']' {
+						i += 2
+						continue
+					}
+					break
+				}
 				i++
 			}
 			i++
@@ -357,6 +370,13 @@ func RenameStatement(dbType, current, next, schema, oldTable, newName string) (s
 // Ordering on the key is what makes consecutive reads agree, and DISTINCT
 // only allows it because the key is in the select list. `name` must already
 // be qualified and quoted by the caller.
+//
+// The key is filtered IS NOT NULL so every returned row is a value the grid
+// can show: the caller sizes its truncation probe on the raw row count, and a
+// NULL row inside the window would make "the window filled" ambiguous between
+// "more values exist" and "a NULL occupied a slot" — NULLs sort first on
+// PostgreSQL, so the ambiguity hit exactly the full-window case. Callers that
+// want NULL as a candidate build their own query.
 func FKValuesQuery(dbType, name, refColumn, labelColumn string, limit int) (string, error) {
 	if limit <= 0 {
 		return "", fmt.Errorf("invalid limit %d", limit)
@@ -375,11 +395,11 @@ func FKValuesQuery(dbType, name, refColumn, labelColumn string, limit int) (stri
 	}
 	switch dbType {
 	case MySQL, Postgres, SQLite:
-		return fmt.Sprintf("SELECT DISTINCT %s FROM %s ORDER BY %s LIMIT %d", selected, name, key, limit), nil
+		return fmt.Sprintf("SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL ORDER BY %s LIMIT %d", selected, name, key, key, limit), nil
 	case SQLServer, Oracle:
 		return fmt.Sprintf(
-			"SELECT DISTINCT %s FROM %s ORDER BY %s OFFSET 0 ROWS FETCH NEXT %d ROWS ONLY",
-			selected, name, key, limit), nil
+			"SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL ORDER BY %s OFFSET 0 ROWS FETCH NEXT %d ROWS ONLY",
+			selected, name, key, key, limit), nil
 	}
 	return "", fmt.Errorf("unsupported type: %s", dbType)
 }

@@ -273,6 +273,35 @@ func AsExtraMetadata(d Driver) (ExtraMetadataReader, bool) {
 	return x, ok
 }
 
+// TriggerLister is the optional capability for reading a table's TRIGGERS and
+// one trigger's definition.
+//
+// It is separate from ExtraMetadataReader because triggers are the one object
+// family that almost every engine has but SQLite's catalog does not share a
+// shape for: SQLite keeps them in sqlite_master, MySQL in
+// information_schema.TRIGGERS, PostgreSQL's pg_trigger, SQL Server's sys.triggers
+// and Oracle's user_triggers. The recipes live in sqltext/triggers.go, so each
+// driver only executes and maps.
+//
+// Triggers hang off a TABLE, not a schema, so both methods take the table (the
+// definition only needs the name, which is unique per schema in every engine
+// here).
+type TriggerLister interface {
+	// Triggers lists one table's triggers in name order.
+	Triggers(ctx context.Context, schema, table string) ([]TriggerInfo, error)
+	// TriggerDefinition returns the DDL that recreates a trigger: complete
+	// CREATE TRIGGER text where the engine stores it (SQLite, SQL Server,
+	// PostgreSQL's pg_get_triggerdef) and the best readable form elsewhere
+	// (MySQL's SHOW CREATE, Oracle's DESCRIPTION + body).
+	TriggerDefinition(ctx context.Context, schema, trigger string) (string, error)
+}
+
+// AsTriggerLister is the capability assertion helper.
+func AsTriggerLister(d Driver) (TriggerLister, bool) {
+	x, ok := d.(TriggerLister)
+	return x, ok
+}
+
 // ObjectHealthReader is the optional capability for CATALOG MAINTENANCE facts:
 // which objects the engine reports as invalid (compiled but broken), and which
 // objects depend on which.

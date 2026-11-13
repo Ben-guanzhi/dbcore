@@ -43,6 +43,12 @@ type SessionCore struct {
 	mu   sync.Mutex
 	conn *sql.Conn
 	tx   *sql.Tx
+	// batchTx marks that an ApplyBatch is running its own committed
+	// transaction, so a concurrent BeginTx refuses instead of silently
+	// splitting the session's write path across two transactions. The lock
+	// itself cannot carry this decision across the batch's I/O — the sentinel
+	// can.
+	batchTx bool
 }
 
 // NewSessionCore builds the wide-session core for one driver. The driver keeps
@@ -75,12 +81,18 @@ func (s *SessionCore) SetCreateDatabase(fn func(context.Context, string, map[str
 // ---- manual transactions ---------------------------------------------------
 
 // BeginTx opens a manual transaction on a dedicated connection held out of the
-// pool. A second Begin without Commit/Rollback fails.
+// pool. A second Begin without Commit/Rollback fails, and so does a Begin while
+// an ApplyBatch is running its own committed transaction: the two racing calls
+// would otherwise put one write inside the manual transaction and the other on
+// a pool connection of its own, and neither would see the other's writes.
 func (s *SessionCore) BeginTx(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tx != nil {
 		return fmt.Errorf("transaction already active")
+	}
+	if s.batchTx {
+		return fmt.Errorf("a batch commit is in flight; retry after it finishes")
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -326,12 +338,33 @@ func (s *SessionCore) ApplyBatch(ctx context.Context, req BatchRequest) error {
 		return runBatch(ctx, ex, stmts)
 	}
 
+	// The fast path above observed the session state under s.mu but its
+	// decision does not outlive the lock: a concurrent BeginTx can install the
+	// manual transaction between execer's unlock and here. Re-decide under one
+	// critical section, and when the batch takes the session's write path,
+	// mark it with batchTx so a racing BeginTx refuses instead of diverging.
+	// The batch then either rides the manual transaction (its lifecycle owner
+	// commits or rolls it back) or runs on its own transaction that this call
+	// commits — never both, and never outside both. Holding s.mu across the
+	// batch itself would serialize every execer() against the batch's I/O, so
+	// the sentinel carries the decision, not the lock. (Single-statement
+	// writers keep the execer fast path: with no manual transaction open their
+	// pool execution is independent auto-commit, so a racing BeginTx cannot
+	// strand them mid-decision the way it can strand a multi-statement batch.)
 	s.mu.Lock()
-	tx := s.tx
-	s.mu.Unlock()
-	if tx != nil { // raced with BeginTx after execer saw none; run on it anyway
+	if s.tx != nil {
+		tx := s.tx
+		s.mu.Unlock()
 		return runBatch(ctx, tx, stmts)
 	}
+	s.batchTx = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.batchTx = false
+		s.mu.Unlock()
+	}()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
