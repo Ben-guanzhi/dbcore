@@ -50,6 +50,25 @@ const (
 type Capability struct {
 	Key         string `json:"key"`
 	Commutative bool   `json:"commutative"`
+	// Version is the version of a key THIS plugin PROVIDES (zero means 1). It is
+	// an integer, not semver: §6.6's point is that semver is an unenforceable
+	// convention, so what the host can actually check is "the provider offers at
+	// least N".
+	Version int `json:"version,omitempty"`
+	// MinVersion is what a DEPENDENCY requires of its provider (zero means any).
+	// The host resolves it against the ACTIVE provider's Version and refuses to
+	// activate on a gap — the peer-dependency model (Cordis' current approach),
+	// with multi-version coexistence explicitly NOT supported (documented as an
+	// open question rather than pretended).
+	MinVersion int `json:"minVersion,omitempty"`
+}
+
+// VersionOr is the provided version with the implicit default of 1.
+func (c Capability) VersionOr() int {
+	if c.Version <= 0 {
+		return 1
+	}
+	return c.Version
 }
 
 // Banner is the workbench plugin's declaration, sent after the plugindriver banner
@@ -93,10 +112,19 @@ func (b Banner) Validate() error {
 		if !c.Commutative {
 			return &Error{Code: CodeNonCommutative, Message: "provided key " + c.Key + " is not witnessed commutative (Thm 47)"}
 		}
+		if c.Version < 0 {
+			return &Error{Code: CodeBadBanner, Message: "provided key " + c.Key + " has a negative version"}
+		}
+		if c.MinVersion != 0 {
+			return &Error{Code: CodeBadBanner, Message: "provided key " + c.Key + " must not carry a minimum version"}
+		}
 	}
 	for _, c := range b.Depends {
 		if c.Key == "" {
 			return &Error{Code: CodeBadBanner, Message: "a declared dependency has an empty name"}
+		}
+		if c.MinVersion < 0 {
+			return &Error{Code: CodeBadBanner, Message: "dependency " + c.Key + " has a negative minimum version"}
 		}
 	}
 	// Self-dependency would make precedence ≺ cyclic (Def 72: n ≺ n when a component
