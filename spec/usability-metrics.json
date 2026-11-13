@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "comment": "跨客户端可用性指标契约（S-01，SIMS 213 / Sullivan：可用性是可测的）。本文件随内核版本化，各客户端按相对路径读取。每条事件 = 一次任务尝试；Sullivan 的三项指标由字段承载：成功 = outcome=ok，耗时 = duration_ms，回退 = outcome=reverted（或独立的 revert 事件）。本地落盘、默认关闭、不上传。",
+  "storage": {
+    "format": "ndjson",
+    "default_file": "usability.ndjson",
+    "max_bytes": 1048576
+  },
+  "enable": {
+    "env": "POLYDB_USABILITY",
+    "values": ["1", "true"]
+  },
+  "required_fields": ["ts", "client", "task", "outcome", "duration_ms"],
+  "outcomes": ["ok", "error", "cancelled", "reverted"],
+  "tasks": {
+    "connect": {
+      "description": "建立连接（含首次 schema 加载前的连通性）",
+      "fields": ["engine", "ok"]
+    },
+    "query": {
+      "description": "执行一条语句（含浏览表时发出的 SELECT）",
+      "fields": ["statement_type", "rows", "truncated"]
+    },
+    "browse": {
+      "description": "浏览一张表的首页/下一页",
+      "fields": ["table", "rows", "page"]
+    },
+    "edit": {
+      "description": "把单元格改动写入工作副本（尚未提交）",
+      "fields": ["table", "cells"]
+    },
+    "commit": {
+      "description": "提交工作副本（事务提交）",
+      "fields": ["table", "statements"]
+    },
+    "rollback": {
+      "description": "放弃工作副本（回滚），即任务级 reverted",
+      "fields": ["table"]
+    },
+    "export": {
+      "description": "导出结果/表",
+      "fields": ["format", "rows"]
+    },
+    "cancel": {
+      "description": "用户取消在途查询",
+      "fields": ["phase"]
+    }
+  }
+}

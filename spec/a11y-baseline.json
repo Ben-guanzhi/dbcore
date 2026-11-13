@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "comment": "可及性基线契约（S-04，SIMS 213 / Cooper 防错 + Ivory & Hearst 可测；本文件随内核版本化）：每个可交互控件必须有可读名字，且键盘可达。rules[].applies_to 声明该规则对哪类前端生效——web（aria/可见文本）、gpu（可见文本或 tooltip）、fyne（控件 Label）、tui（帮助/状态栏里可见）。",
+  "rules": [
+    {
+      "id": "interactive-name",
+      "applies_to": ["web", "gpu", "fyne"],
+      "description": "每个 button/select/input 必须有可读名字：aria-label、关联 <label>、可见文本或 tooltip。空名字的控件对屏幕阅读器等于不存在。"
+    },
+    {
+      "id": "contrast",
+      "applies_to": ["web", "gpu"],
+      "min_ratio": 4.5,
+      "description": "正文文字与背景的对比度 ≥ 4.5:1（WCAG AA 小字号）。主题必须成对校验，不能靠肉眼。"
+    },
+    {
+      "id": "keyboard-reachable",
+      "applies_to": ["web", "gpu", "fyne"],
+      "description": "每个主要动作都能不使用鼠标触达（快捷键或可聚焦控件）。数据库客户端的高频动作：执行、取消、提交、回滚、导出、切页签。"
+    },
+    {
+      "id": "no-color-only-signal",
+      "applies_to": ["web", "gpu", "fyne", "tui"],
+      "description": "状态不能只用颜色表达（事务中/只读/连接健康），必须配文本或图标，否则色觉障碍用户读不到。"
+    }
+  ]
+}
