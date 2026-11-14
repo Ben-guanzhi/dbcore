@@ -245,7 +245,7 @@ func (p *Patterns) Row(columns []string, row []interface{}, names *SensitiveName
 			continue
 		}
 		if i < len(columns) && names.IsSensitive(columns[i]) {
-			out[i] = maskWhole(s)
+			out[i] = MaskWhole(s)
 			continue
 		}
 		out[i] = p.Value(s)
@@ -253,10 +253,10 @@ func (p *Patterns) Row(columns []string, row []interface{}, names *SensitiveName
 	return out
 }
 
-// maskWhole replaces every non-newline character with '*', keeping only the
+// MaskWhole replaces every non-newline character with '*', keeping only the
 // value's length: a column named password carries secrets whose shape reveals
 // nothing, so nothing survives.
-func maskWhole(s string) string {
+func MaskWhole(s string) string {
 	r := []rune(s)
 	for i := range r {
 		if r[i] != '\n' && r[i] != '\r' && r[i] != '\t' {
@@ -278,7 +278,7 @@ func (p *Patterns) RowString(columns, row []string, names *SensitiveNames) []str
 			continue
 		}
 		if i < len(columns) && names.IsSensitive(columns[i]) {
-			out[i] = maskWhole(cell)
+			out[i] = MaskWhole(cell)
 			continue
 		}
 		out[i] = p.Value(cell)
