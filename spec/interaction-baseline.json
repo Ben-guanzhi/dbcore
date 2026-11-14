@@ -12,7 +12,7 @@
         "tableprogo": "partial — 网格撤销是按钮（DataGrid.tsx:1326，title 已写 Ctrl+Z 但键未绑定）；编辑器文本撤销已有",
         "dbstudio": "partial — 工作副本回滚有按钮与菜单（edit.go:230 rollback），无 Ctrl+Z；编辑器文本撤销由 mygo 编辑器自带",
         "fynequery": "done — canvas AddShortcut(ctrl+z) → dataTable.undoLast()（最近一次待提交格），焦点优先由 Fyne 的 shortcut 路由保证（SQL 编辑器的 TypedShortcut 先消费自己的文本撤销）",
-        "sqltui": "gap — 无网格撤销（TUI 的行编辑走 confirm overlay，单条提交，无撤销栈）；gridUndo 需要先决定撤销语义",
+        "sqltui": "done — ctrl+z 撤销待确认的 pendingEdit/pendingDelete（app.go ActUndo）——与 GUI 端『提交前单手势撤销最后一次改动』同构；无多步撤销栈（TUI 行编辑单条提交，无栈可回）",
         "polydb": "done — Web 端 TableDataView.tsx:316 已有窗口级 ctrl+z → ChangeQueue.undo()（INPUT/TEXTAREA/SELECT 聚焦时不拦截，编辑器文本撤销由控件自理）"
       }
     },
