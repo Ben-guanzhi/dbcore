@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"strings"
 
-	_ "github.com/sijms/go-ora/v2" // registers the "oracle" driver with database/sql
 
 	"github.com/dbcore/dbcore"
 )

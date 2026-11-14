@@ -3,41 +3,16 @@ package oracle
 import (
 	"context"
 	"database/sql"
-	"net/url"
-	"strings"
 
 	"github.com/dbcore/dbcore"
+	"github.com/dbcore/dbcore/oracledsn"
 )
 
 func init() { dbcore.RegisterFactory(dbcore.KindOracle, OpenSpec) }
 
-// DSN renders spec as an oracle:// URL understood by go-ora. The database part
-// is the service name (or SID), i.e. "oracle://user:pass@host:1521/ORCLPDB1".
-func DSN(spec dbcore.ConnSpec) string {
-	u := url.URL{
-		Scheme: "oracle",
-		User:   url.UserPassword(spec.User, spec.Password),
-		Host:   spec.Addr(),
-	}
-	service := spec.Database
-	if service == "" {
-		service = spec.Schema
-	}
-	if service != "" {
-		u.Path = "/" + service
-	}
-	q := url.Values{}
-	for k, v := range spec.Params {
-		q.Set(k, v)
-	}
-	if strings.EqualFold(spec.SSLMode, "require") || strings.EqualFold(spec.SSLMode, "verify-full") {
-		// go-ora enables TLS via the SSL parameter.
-		q.Set("SSL", "true")
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
-}
-
+// DSN renders spec as an oracle:// URL understood by go-ora — the spelling
+// lives in oracledsn so clients can render it without linking this driver.
+func DSN(spec dbcore.ConnSpec) string { return oracledsn.DSN(spec) }
 // OpenSpec implements dbcore.Factory. go-ora has no per-connection dialer hook;
 // an SSH tunnel must be terminated by the caller and pointed at via Host/Port.
 func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig) (dbcore.Driver, error) {
