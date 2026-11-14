@@ -29,8 +29,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/oracle"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/oracle"
 
 	// The driver registers itself as "dm" with database/sql.
 	_ "github.com/sophon-zt/sql-driver/dameng"

@@ -16,7 +16,7 @@ import (
 
 	_ "github.com/microsoft/go-mssqldb" // registers the "sqlserver" driver with database/sql
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // DriverName is the go-mssqldb registered driver name.

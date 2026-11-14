@@ -9,7 +9,7 @@ import (
 
 	drvmysql "github.com/go-sql-driver/mysql"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func TestDSNBuildsEscapedConfig(t *testing.T) {

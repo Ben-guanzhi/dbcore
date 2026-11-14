@@ -34,7 +34,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // Op is one kind of change a plan can carry.

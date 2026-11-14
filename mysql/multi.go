@@ -3,7 +3,7 @@ package mysql
 import (
 	"context"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // ExecuteMulti answers every result set the statement emits: a batch of

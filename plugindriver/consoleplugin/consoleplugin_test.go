@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 // ---------- Nacos ----------

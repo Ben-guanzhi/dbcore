@@ -3,7 +3,7 @@ package keyset
 import (
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func keys(t *testing.T, cols ...dbcore.ColumnInfo) []Key {

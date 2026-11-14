@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // Read/write timeouts land in the DSN the same place the connect timeout

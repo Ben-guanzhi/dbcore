@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/oracledsn"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/oracledsn"
 )
 
 func init() { dbcore.RegisterFactory(dbcore.KindOracle, OpenSpec) }

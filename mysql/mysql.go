@@ -15,7 +15,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql" // registers the "mysql" driver with database/sql
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // DriverName is the go-sql-driver/mysql registered driver name.

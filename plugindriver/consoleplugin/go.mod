@@ -1,9 +1,9 @@
-module github.com/dbcore/dbcore/plugindriver/consoleplugin
+module github.com/Ben-guanzhi/dbcore/plugindriver/consoleplugin
 
 go 1.25.0
 
 require (
-	github.com/dbcore/dbcore v0.0.0
+	github.com/Ben-guanzhi/dbcore v0.0.0
 	github.com/segmentio/kafka-go v0.4.51
 )
 
@@ -16,4 +16,4 @@ require (
 // purpose: its Kafka client dependency must not leak into the kernel that fynequery,
 // sqltui and polydb all build against. The replace points at the local kernel so the
 // plugin always tracks the checked-out protocol.
-replace github.com/dbcore/dbcore => ../../
+replace github.com/Ben-guanzhi/dbcore => ../../

@@ -19,7 +19,7 @@ package sqltext
 import (
 	"fmt"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // TriggerInfo is one row of TriggersQuery's result. It is dbcore's type: the

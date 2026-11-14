@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/drivertest"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/drivertest"
 )
 
 // TestSQLiteMetadataExtras pins the metadata the shared harness does not assert:

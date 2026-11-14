@@ -43,15 +43,15 @@ var claims = []consumerClaim{
 		dir:  "TableProGo",
 		doc:  "WORKSPACE.md §2 TableProGo 行 / DB-CORE-CONTRACT.md §8.3-8.6",
 		requires: []string{
-			"github.com/dbcore/dbcore",
-			"github.com/dbcore/dbcore/sqltext",
-			"github.com/dbcore/dbcore/keyset",
-			"github.com/dbcore/dbcore/mysql",
-			"github.com/dbcore/dbcore/postgres",
-			"github.com/dbcore/dbcore/mssql",
-			"github.com/dbcore/dbcore/oracle",
-			"github.com/dbcore/dbcore/sqlite",
-			"github.com/dbcore/dbcore/redis",
+			"github.com/Ben-guanzhi/dbcore",
+			"github.com/Ben-guanzhi/dbcore/sqltext",
+			"github.com/Ben-guanzhi/dbcore/keyset",
+			"github.com/Ben-guanzhi/dbcore/mysql",
+			"github.com/Ben-guanzhi/dbcore/postgres",
+			"github.com/Ben-guanzhi/dbcore/mssql",
+			"github.com/Ben-guanzhi/dbcore/oracle",
+			"github.com/Ben-guanzhi/dbcore/sqlite",
+			"github.com/Ben-guanzhi/dbcore/redis",
 		},
 		// keyset = P1-7：表浏览键集分页算法经 internal/paging 适配层消费内核
 		// dbcore/keyset（适配层不得长出引擎知识）。
@@ -62,14 +62,14 @@ var claims = []consumerClaim{
 		dir:  "fynequery",
 		doc:  "WORKSPACE.md §2 fynequery 行 (冻结: 目录/索引/KV 只读消费 + 插件协议经内核 plugindriver; Session/DML/连接不再迁入内核 — INTEGRATION-PLAN P1-6)",
 		requires: []string{
-			"github.com/dbcore/dbcore",
-			"github.com/dbcore/dbcore/sqltext",
-			"github.com/dbcore/dbcore/mysql",
-			"github.com/dbcore/dbcore/postgres",
-			"github.com/dbcore/dbcore/mssql",
-			"github.com/dbcore/dbcore/oracle",
-			"github.com/dbcore/dbcore/redis",
-			"github.com/dbcore/dbcore/plugindriver",
+			"github.com/Ben-guanzhi/dbcore",
+			"github.com/Ben-guanzhi/dbcore/sqltext",
+			"github.com/Ben-guanzhi/dbcore/mysql",
+			"github.com/Ben-guanzhi/dbcore/postgres",
+			"github.com/Ben-guanzhi/dbcore/mssql",
+			"github.com/Ben-guanzhi/dbcore/oracle",
+			"github.com/Ben-guanzhi/dbcore/redis",
+			"github.com/Ben-guanzhi/dbcore/plugindriver",
 		},
 		// fynequery 的接入深度已定格 (P1-6 裁定, 对应 DECISION §2.5 "冻结为组件参考"):
 		// 目录/索引经内核驱动只读消费, Redis 经 KVDriver, 方言字符串走 sqltext。
@@ -90,12 +90,12 @@ var claims = []consumerClaim{
 		dir:  "polydb/go",
 		doc:  "WORKSPACE.md §2 polydb 行 (实际: bridge 再导出 + 五引擎 Option B 原生契约化 + Redis KV 接内核 + appcore 事务注册表接 TxManager)",
 		requires: []string{
-			"github.com/dbcore/dbcore",
-			"github.com/dbcore/dbcore/mysql",
-			"github.com/dbcore/dbcore/postgres",
-			"github.com/dbcore/dbcore/mssql",
-			"github.com/dbcore/dbcore/oracle",
-			"github.com/dbcore/dbcore/redis",
+			"github.com/Ben-guanzhi/dbcore",
+			"github.com/Ben-guanzhi/dbcore/mysql",
+			"github.com/Ben-guanzhi/dbcore/postgres",
+			"github.com/Ben-guanzhi/dbcore/mssql",
+			"github.com/Ben-guanzhi/dbcore/oracle",
+			"github.com/Ben-guanzhi/dbcore/redis",
 			"github.com/polydb/polydb/pkg/dbcore/bridge",
 		},
 		requiresSymbols: []string{"dbc.SQLTxDriver", "bridge.NewTxManager"},
@@ -116,14 +116,14 @@ var claims = []consumerClaim{
 		dir:  "sqltui-main",
 		doc:  "WORKSPACE.md §2 sqltui-main 行 (TUI 场景线: 连接/执行/目录/方言/KV 经内核; MSSQL 跨库目录与文件 loader 留在客户端)",
 		requires: []string{
-			"github.com/dbcore/dbcore",
-			"github.com/dbcore/dbcore/sqltext",
-			"github.com/dbcore/dbcore/mysql",
-			"github.com/dbcore/dbcore/postgres",
-			"github.com/dbcore/dbcore/mssql",
-			"github.com/dbcore/dbcore/oracle",
-			"github.com/dbcore/dbcore/sqlite",
-			"github.com/dbcore/dbcore/redis",
+			"github.com/Ben-guanzhi/dbcore",
+			"github.com/Ben-guanzhi/dbcore/sqltext",
+			"github.com/Ben-guanzhi/dbcore/mysql",
+			"github.com/Ben-guanzhi/dbcore/postgres",
+			"github.com/Ben-guanzhi/dbcore/mssql",
+			"github.com/Ben-guanzhi/dbcore/oracle",
+			"github.com/Ben-guanzhi/dbcore/sqlite",
+			"github.com/Ben-guanzhi/dbcore/redis",
 		},
 		// 2026-10-25 接入: 五个 SQL 引擎经 internal/db/core 适配器消费内核
 		// (Open/Execute/ListXxx/sqltext 引用与限行), Redis 经 KVDriver
@@ -148,11 +148,11 @@ var claims = []consumerClaim{
 		dir:  "db-dev",
 		doc:  "WORKSPACE.md §2 db-dev 行 (2026-10-25 破例解冻: 仅 DSN 拼装收敛到内核 dbcoreX.DSN; 连接生命周期/应用级池/SSH/自定义 TLS 配置留客户端)",
 		requires: []string{
-			"github.com/dbcore/dbcore",
-			"github.com/dbcore/dbcore/mysql",
-			"github.com/dbcore/dbcore/postgres",
-			"github.com/dbcore/dbcore/mssql",
-			"github.com/dbcore/dbcore/sqlite",
+			"github.com/Ben-guanzhi/dbcore",
+			"github.com/Ben-guanzhi/dbcore/mysql",
+			"github.com/Ben-guanzhi/dbcore/postgres",
+			"github.com/Ben-guanzhi/dbcore/mssql",
+			"github.com/Ben-guanzhi/dbcore/sqlite",
 		},
 		// 2026-10-25: db-dev (已归档, 只收安全/崩溃修复) 经用户裁定破例解冻, 仅把
 		// "连接串拼装"这一处重复收敛到内核: 四个引擎的 DSN 改由 dbcoreX.DSN(ConnSpec)
@@ -272,7 +272,7 @@ func scanGo(root string) (map[string]struct{}, string, error) {
 // dirsImportingDBCore 返回 (相对 root 的) 直接 import 根包 dbcore 的目录集合。
 func dirsImportingDBCore(t *testing.T, root string) []string {
 	t.Helper()
-	const pkg = `"github.com/dbcore/dbcore"`
+	const pkg = `"github.com/Ben-guanzhi/dbcore"`
 	seen := map[string]struct{}{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -317,8 +317,8 @@ func requireLocalReplace(root string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(string(b), "github.com/dbcore/dbcore =>") {
-		return fmt.Errorf("go.mod 缺少 `replace github.com/dbcore/dbcore => ...`: 内核尚未发布, 去掉 replace 后本地无法构建")
+	if !strings.Contains(string(b), "github.com/Ben-guanzhi/dbcore =>") {
+		return fmt.Errorf("go.mod 缺少 `replace github.com/Ben-guanzhi/dbcore => ...`: 内核尚未发布, 去掉 replace 后本地无法构建")
 	}
 	return nil
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func TestDSNShapeAndEscaping(t *testing.T) {

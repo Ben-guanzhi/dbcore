@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // ConnDriver is a dbcore.SQLDriver over a plugin that serves several

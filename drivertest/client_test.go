@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func TestPlaceholderPerEngine(t *testing.T) {

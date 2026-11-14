@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // The tagged cell is the protocol's precision contract: JSON has one number

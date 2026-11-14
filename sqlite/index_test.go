@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // The CREATE INDEX parser is the only way to recover an expression part's text

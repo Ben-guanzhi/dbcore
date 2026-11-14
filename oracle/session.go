@@ -5,7 +5,7 @@ package oracle
 // are created via DBCA or DBA tooling, not from an ordinary client session —
 // and the kernel's SessionCore reports that clearly.
 
-import "github.com/dbcore/dbcore"
+import "github.com/Ben-guanzhi/dbcore"
 
 var _ dbcore.WideSession = (*OracleDriver)(nil)
 

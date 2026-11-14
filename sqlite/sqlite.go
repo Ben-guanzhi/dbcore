@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 	_ "modernc.org/sqlite" // registers the "sqlite" driver with database/sql
 )
 

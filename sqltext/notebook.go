@@ -34,7 +34,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // NotebookCell is one cell of a notebook. Index in the slice is the cell's

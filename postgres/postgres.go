@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" driver with database/sql
 )
 

@@ -11,8 +11,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/drivertest"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/drivertest"
 )
 
 func TestRedisKVContract(t *testing.T) {

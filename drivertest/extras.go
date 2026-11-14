@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // runCatalogDetailContract asserts the methods the suite used to leave

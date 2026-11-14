@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // KVSpec describes how to open the KV driver for the contract run.

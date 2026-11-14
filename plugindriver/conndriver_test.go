@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 // TestOneProcessServesTwoConnections opens two distinct database files on one

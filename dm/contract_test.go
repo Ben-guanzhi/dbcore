@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/drivertest"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/drivertest"
 )
 
 func TestDMContract(t *testing.T) {

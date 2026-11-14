@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func liveDM(t *testing.T) (dbcore.SQLDriver, context.Context, string) {

@@ -21,8 +21,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 // columnsRecipe is Oracle's columns query minus the identity join.

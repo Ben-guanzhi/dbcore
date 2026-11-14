@@ -8,7 +8,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 var _ dbcore.WideSession = (*MySQLDriver)(nil)

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/sqlite"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/sqlite"
 )
 
 func TestDSNEmptyFileIsInMemory(t *testing.T) {

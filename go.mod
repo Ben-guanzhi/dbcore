@@ -1,4 +1,4 @@
-module github.com/dbcore/dbcore
+module github.com/Ben-guanzhi/dbcore
 
 go 1.25.0
 

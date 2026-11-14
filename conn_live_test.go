@@ -24,14 +24,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 
-	_ "github.com/dbcore/dbcore/mssql"
-	_ "github.com/dbcore/dbcore/mysql"
-	_ "github.com/dbcore/dbcore/oracle"
-	_ "github.com/dbcore/dbcore/postgres"
-	_ "github.com/dbcore/dbcore/redis"
-	_ "github.com/dbcore/dbcore/sqlite"
+	_ "github.com/Ben-guanzhi/dbcore/mssql"
+	_ "github.com/Ben-guanzhi/dbcore/mysql"
+	_ "github.com/Ben-guanzhi/dbcore/oracle"
+	_ "github.com/Ben-guanzhi/dbcore/postgres"
+	_ "github.com/Ben-guanzhi/dbcore/redis"
+	_ "github.com/Ben-guanzhi/dbcore/sqlite"
 )
 
 // specFromURL turns a test URL into a ConnSpec (kind from the scheme).

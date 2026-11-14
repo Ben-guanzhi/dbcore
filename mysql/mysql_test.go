@@ -9,8 +9,8 @@ import (
 
 	gomysql "github.com/go-sql-driver/mysql"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/drivertest"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/drivertest"
 )
 
 // TestMySQLContract runs the full contract suite against a live MySQL/MariaDB.

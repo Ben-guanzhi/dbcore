@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // ProtocolName and ProtocolVersion identify the wire protocol in the banner. A host

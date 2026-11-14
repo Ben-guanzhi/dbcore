@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/mssql"
-	"github.com/dbcore/dbcore/mysql"
-	"github.com/dbcore/dbcore/oracle"
-	"github.com/dbcore/dbcore/postgres"
-	"github.com/dbcore/dbcore/sqlite"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/mssql"
+	"github.com/Ben-guanzhi/dbcore/mysql"
+	"github.com/Ben-guanzhi/dbcore/oracle"
+	"github.com/Ben-guanzhi/dbcore/postgres"
+	"github.com/Ben-guanzhi/dbcore/sqlite"
 )
 
 // TestFilterIsNullContract pins the IS NULL / IS NOT NULL contract across

@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // DriverName is the go-ora registered driver name.

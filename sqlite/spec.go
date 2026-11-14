@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func init() { dbcore.RegisterFactory(dbcore.KindSQLite, OpenSpec) }

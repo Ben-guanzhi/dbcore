@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 // legacyCellPlugin is a plugin that speaks the old string-cell form.
@@ -27,7 +27,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 func main() {
@@ -98,7 +98,7 @@ func buildLegacyCellPlugin(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("abs: %v", err)
 	}
-	goMod := "module legacycell\n\ngo 1.24\n\nrequire github.com/dbcore/dbcore v0.0.0\n\nreplace github.com/dbcore/dbcore => " +
+	goMod := "module legacycell\n\ngo 1.24\n\nrequire github.com/Ben-guanzhi/dbcore v0.0.0\n\nreplace github.com/Ben-guanzhi/dbcore => " +
 		filepath.ToSlash(kernelRoot) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/drivertest"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/drivertest"
 )
 
 // TestOracleContract runs the full contract suite against a live Oracle.

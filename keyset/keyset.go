@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 // Kind is how a key column's values are read back and compared.

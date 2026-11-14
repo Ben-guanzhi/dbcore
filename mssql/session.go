@@ -4,7 +4,7 @@ package mssql
 // SERVERPROPERTY/sys catalog; CREATE DATABASE (with optional COLLATE) is
 // handled by the kernel's SessionCore dispatch.
 
-import "github.com/dbcore/dbcore"
+import "github.com/Ben-guanzhi/dbcore"
 
 var _ dbcore.WideSession = (*MSSQLDriver)(nil)
 

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 func TestDSNMatchesTheVendoredDriverFormat(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 // Triggers lists the table's triggers in name order, with MySQL's own timing,

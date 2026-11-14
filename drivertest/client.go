@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // Spec describes how to open the client's driver for the contract run.

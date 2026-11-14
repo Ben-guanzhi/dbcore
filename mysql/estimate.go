@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // EstimatedRows reads one table's TABLE_ROWS: the catalog's estimate, from

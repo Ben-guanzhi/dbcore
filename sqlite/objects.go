@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 // ViewDefinition returns the view's CREATE VIEW statement as stored in

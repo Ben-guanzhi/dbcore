@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // Deep paging through the BrowseRows path: a keyset walk over 100 rows must

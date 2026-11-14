@@ -7,7 +7,7 @@ package dm
 // the current user. A richer panel would need a DM instance to check against, which
 // is exactly what this build did not have.
 
-import "github.com/dbcore/dbcore"
+import "github.com/Ben-guanzhi/dbcore"
 
 var _ dbcore.WideSession = (*DMDriver)(nil)
 

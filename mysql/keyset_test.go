@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // Single-key keyset continuation: the predicate joins an existing WHERE with

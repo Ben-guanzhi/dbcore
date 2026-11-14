@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 // waitMarker polls for a marker file the fake plugin writes; a marker is the
@@ -46,8 +46,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 func main() {
@@ -240,7 +240,7 @@ func buildFakePlugin(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("abs: %v", err)
 	}
-	goMod := "module fakeplugin\n\ngo 1.21\n\nrequire github.com/dbcore/dbcore v0.0.0\n\nreplace github.com/dbcore/dbcore => " + filepath.ToSlash(repoRoot) + "\n"
+	goMod := "module fakeplugin\n\ngo 1.21\n\nrequire github.com/Ben-guanzhi/dbcore v0.0.0\n\nreplace github.com/Ben-guanzhi/dbcore => " + filepath.ToSlash(repoRoot) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}

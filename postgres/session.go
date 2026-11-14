@@ -4,7 +4,7 @@ package postgres
 // pg_stat_activity/pg_stat_database; CREATE DATABASE (with ENCODING/LC_COLLATE
 // options) is handled by the kernel's SessionCore dispatch.
 
-import "github.com/dbcore/dbcore"
+import "github.com/Ben-guanzhi/dbcore"
 
 var _ dbcore.WideSession = (*PostgresDriver)(nil)
 

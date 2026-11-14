@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/dberror"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/dberror"
 )
 
 // Harness drives one engine driver through the full contract.

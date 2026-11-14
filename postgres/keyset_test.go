@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // The positional dialect numbers every parameter, so a keyset continuation

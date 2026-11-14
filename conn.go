@@ -248,7 +248,7 @@ func RegisteredKinds() []DatabaseKind {
 
 // Open connects using the Factory registered for spec.Kind.
 //
-// Callers opt into engines by importing their package, e.g. `_ "github.com/dbcore/dbcore/postgres"`,
+// Callers opt into engines by importing their package, e.g. `_ "github.com/Ben-guanzhi/dbcore/postgres"`,
 // which keeps binaries free of unused drivers.
 func Open(ctx context.Context, spec ConnSpec, pool PoolConfig) (Driver, error) {
 	if strings.TrimSpace(string(spec.Kind)) == "" {

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/sqlite"
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/sqlite"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 func column(name, typ string, nullable bool, def string) dbcore.ColumnInfo {

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore/plugindriver"
+	"github.com/Ben-guanzhi/dbcore/plugindriver"
 )
 
 // fynequerySQLitePlugin returns the SQLite plugin binary fynequery builds.

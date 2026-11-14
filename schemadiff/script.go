@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbcore/dbcore"
-	"github.com/dbcore/dbcore/ddl"
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore"
+	"github.com/Ben-guanzhi/dbcore/ddl"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 // Statement is one executable line of a synchronization, tied back to the entry

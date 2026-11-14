@@ -18,7 +18,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 const defaultScanCount = 100

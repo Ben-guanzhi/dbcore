@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dbcore/dbcore"
+	"github.com/Ben-guanzhi/dbcore"
 )
 
 // fakeDriver is a minimal Driver used to test the registry without importing a

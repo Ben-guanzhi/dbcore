@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dbcore/dbcore/sqltext"
+	"github.com/Ben-guanzhi/dbcore/sqltext"
 )
 
 // Column is one column of the table being described.
