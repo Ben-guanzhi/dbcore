@@ -13,6 +13,7 @@ func init() { dbcore.RegisterFactory(dbcore.KindOracle, OpenSpec) }
 // DSN renders spec as an oracle:// URL understood by go-ora — the spelling
 // lives in oracledsn so clients can render it without linking this driver.
 func DSN(spec dbcore.ConnSpec) string { return oracledsn.DSN(spec) }
+
 // OpenSpec implements dbcore.Factory. go-ora has no per-connection dialer hook;
 // an SSH tunnel must be terminated by the caller and pointed at via Host/Port.
 func OpenSpec(ctx context.Context, spec dbcore.ConnSpec, pool dbcore.PoolConfig) (dbcore.Driver, error) {

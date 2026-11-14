@@ -77,15 +77,15 @@ func Run(t *testing.T, spec Spec) {
 		tableName = func(name string) string { return FoldName(spec.Kind, name) }
 	}
 	Harness{
-		Make:          spec.Open,
-		Schema:        schema,
-		Placeholder:   placeholder,
-		CreateTable:   create,
-		DropTable:     drop,
-		TableName:     tableName,
-		ColumnFold:    func(s string) string { return FoldName(spec.Kind, s) },
-		Kind:          spec.Kind,
-		TimestampDDL:  spec.TimestampDDL,
+		Make:         spec.Open,
+		Schema:       schema,
+		Placeholder:  placeholder,
+		CreateTable:  create,
+		DropTable:    drop,
+		TableName:    tableName,
+		ColumnFold:   func(s string) string { return FoldName(spec.Kind, s) },
+		Kind:         spec.Kind,
+		TimestampDDL: spec.TimestampDDL,
 	}.Run(t)
 }
 

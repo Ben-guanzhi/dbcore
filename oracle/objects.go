@@ -1,4 +1,4 @@
-﻿package oracle
+package oracle
 
 // The ExtraMetadataReader surface for Oracle: view definitions, CHECK
 // constraints, sequences and routines all exist in the data dictionary.
@@ -237,7 +237,6 @@ func (d *OracleDriver) ObjectDependencies(ctx context.Context, schema, object st
 	}
 	return out, nil
 }
-
 
 // CompileErrors lists the diagnostics a failed compilation recorded (W9).
 //

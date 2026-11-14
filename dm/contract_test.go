@@ -1,4 +1,4 @@
-﻿package dm
+package dm
 
 // W14: DM8 against the SHARED contract suite.
 //

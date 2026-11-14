@@ -144,11 +144,11 @@ func (t *sessionCoreTestTx) didRollback() bool {
 // The catalog surface is stubbed ErrNotSupported — the TxManager never calls it.
 type sessionCoreTestTxDriver struct{ db *sql.DB }
 
-func (d sessionCoreTestTxDriver) Kind() DatabaseKind              { return DatabaseKind("test") }
-func (d sessionCoreTestTxDriver) Ping(ctx context.Context) error  { return d.db.PingContext(ctx) }
-func (d sessionCoreTestTxDriver) Close() error                    { return d.db.Close() }
-func (d sessionCoreTestTxDriver) AsSQL() (SQLDriver, bool)        { return nil, false }
-func (d sessionCoreTestTxDriver) AsKV() (KVDriver, bool)          { return nil, false }
+func (d sessionCoreTestTxDriver) Kind() DatabaseKind             { return DatabaseKind("test") }
+func (d sessionCoreTestTxDriver) Ping(ctx context.Context) error { return d.db.PingContext(ctx) }
+func (d sessionCoreTestTxDriver) Close() error                   { return d.db.Close() }
+func (d sessionCoreTestTxDriver) AsSQL() (SQLDriver, bool)       { return nil, false }
+func (d sessionCoreTestTxDriver) AsKV() (KVDriver, bool)         { return nil, false }
 func (d sessionCoreTestTxDriver) Execute(ctx context.Context, query string, args ...Value) (*QueryResult, error) {
 	return RunQuery(ctx, d.db, query, args)
 }
@@ -270,7 +270,11 @@ func TestSessionCoreBatchRidesManualTransaction(t *testing.T) {
 	if err := s.ApplyBatch(ctx, sessionCoreInsert(map[string]Value{"a": {Kind: ValText, S: "x"}})); err != nil {
 		t.Fatalf("ApplyBatch: %v", err)
 	}
-	if len(func() []*sessionCoreTestTx { scMu.Lock(); defer scMu.Unlock(); return append([]*sessionCoreTestTx(nil), scTxs...) }()) != 1 {
+	if len(func() []*sessionCoreTestTx {
+		scMu.Lock()
+		defer scMu.Unlock()
+		return append([]*sessionCoreTestTx(nil), scTxs...)
+	}()) != 1 {
 		t.Fatalf("batch opened its own transaction; it must ride the manual one")
 	}
 	if manual.didCommit() {

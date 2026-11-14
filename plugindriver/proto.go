@@ -95,12 +95,12 @@ type SchemaArgs struct {
 // that cannot apply it answers ERR_NOT_SUPPORTED rather than returning unfiltered
 // rows (P3-7).
 type BrowseArgs struct {
-	Schema   string       `json:"schema,omitempty"`
-	Table    string       `json:"table"`
-	Page     int          `json:"page,omitempty"`
-	PageSize int          `json:"pageSize,omitempty"`
-	Sort     []SortArg    `json:"sort,omitempty"`
-	Filter   []FilterArg  `json:"filter,omitempty"`
+	Schema   string        `json:"schema,omitempty"`
+	Table    string        `json:"table"`
+	Page     int           `json:"page,omitempty"`
+	PageSize int           `json:"pageSize,omitempty"`
+	Sort     []SortArg     `json:"sort,omitempty"`
+	Filter   []FilterArg   `json:"filter,omitempty"`
 	After    []CellPayload `json:"after,omitempty"`
 }
 

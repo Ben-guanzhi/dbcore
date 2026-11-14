@@ -381,7 +381,7 @@ func CompileErrorsQuery(dbType, schema, object string) (string, []interface{}, e
 		ORDER BY SEQUENCE`,
 		QuotedLiteral(Oracle, upperASCII(schema)), QuotedLiteral(Oracle, upperASCII(object))), nil, nil
 }
-//
+
 // This is a WHITELIST, not a passthrough: the object type comes from a catalog row
 // (or, worse, from a client), and it is spliced into a statement where quoting is
 // not possible — Oracle's grammar wants the bare keyword. An unknown type is

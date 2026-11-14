@@ -1,4 +1,4 @@
-﻿package dm
+package dm
 
 // DM8's own catalog details: the parts where "Oracle-compatible" stops being true.
 //

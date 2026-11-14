@@ -1,4 +1,4 @@
-﻿// Package dm is the 达梦 DM8 driver (W14).
+// Package dm is the 达梦 DM8 driver (W14).
 //
 // DM8 speaks its own wire protocol, so it needs its own driver — the Oracle driver
 // cannot open it even though the SQL is (mostly) Oracle's. The driver used here is
@@ -88,10 +88,10 @@ func (d *DMDriver) Close() error {
 	}
 	return nil
 }
-func (d *DMDriver) Ping(ctx context.Context) error          { return d.db.PingContext(ctx) }
-func (d *DMDriver) AsSQL() (dbcore.SQLDriver, bool)         { return d, true }
-func (d *DMDriver) AsKV() (dbcore.KVDriver, bool)           { return nil, false }
-func (d *DMDriver) Dialect() dbcore.Dialect                 { return d.dialect }
+func (d *DMDriver) Ping(ctx context.Context) error  { return d.db.PingContext(ctx) }
+func (d *DMDriver) AsSQL() (dbcore.SQLDriver, bool) { return d, true }
+func (d *DMDriver) AsKV() (dbcore.KVDriver, bool)   { return nil, false }
+func (d *DMDriver) Dialect() dbcore.Dialect         { return d.dialect }
 
 // Execute runs one statement and returns its result.
 //
@@ -420,7 +420,7 @@ func (d *DMDriver) BrowseRowsCount(ctx context.Context, schema, table string, re
 
 // Compile-time proof that the driver satisfies the kernel's contracts.
 var (
-	_ dbcore.Driver    = (*DMDriver)(nil)
-	_ dbcore.SQLDriver = (*DMDriver)(nil)
+	_ dbcore.Driver      = (*DMDriver)(nil)
+	_ dbcore.SQLDriver   = (*DMDriver)(nil)
 	_ dbcore.SQLTxDriver = (*DMDriver)(nil)
 )

@@ -141,12 +141,12 @@ var patterns = []pattern{
 	{ConnectionBroken, []string{"BAD CONNECTION"}},               // driver.ErrBadConn wording
 
 	// Constraint violations.
-	{UniqueViolation, []string{"DUPLICATE ENTRY"}},                    // MySQL 1062
-	{UniqueViolation, []string{"ERROR 1062"}},                         // MySQL, raw
-	{UniqueViolation, []string{"UNIQUE CONSTRAINT"}},                  // PG wording, SQLite "UNIQUE constraint failed"
-	{UniqueViolation, []string{"VIOLATION OF UNIQUE KEY"}},            // MSSQL 2627/2601
-	{UniqueViolation, []string{"CANNOT INSERT DUPLICATE KEY"}},        // MSSQL 2601
-	{UniqueViolation, []string{"ORA-00001"}},                          // Oracle unique
+	{UniqueViolation, []string{"DUPLICATE ENTRY"}},             // MySQL 1062
+	{UniqueViolation, []string{"ERROR 1062"}},                  // MySQL, raw
+	{UniqueViolation, []string{"UNIQUE CONSTRAINT"}},           // PG wording, SQLite "UNIQUE constraint failed"
+	{UniqueViolation, []string{"VIOLATION OF UNIQUE KEY"}},     // MSSQL 2627/2601
+	{UniqueViolation, []string{"CANNOT INSERT DUPLICATE KEY"}}, // MSSQL 2601
+	{UniqueViolation, []string{"ORA-00001"}},                   // Oracle unique
 	// W14: DM8's own code for a uniqueness violation, verified on a live instance:
 	// "Error -6602: 违反表[...]唯一性约束条件[...]". Without this the client's grid
 	// would show a generic failure where every other engine says "duplicate".

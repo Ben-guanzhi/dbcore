@@ -1,4 +1,4 @@
-﻿package dm
+package dm
 
 // The live half: everything that only a DM server can answer.
 //
@@ -235,7 +235,7 @@ func TestDMLivePagingAndFilter(t *testing.T) {
 
 	// A filter narrows both the page and the count.
 	filtered, err := drv.BrowseRows(ctx, schema, table, &dbcore.TableRowsRequest{
-		Page: 1, PageSize: 50, Filter:     []dbcore.FilterExpr{{Column: "BUCKET", Op: dbcore.FilterEq, Value: dbcore.ValueOf(int64(0))}},
+		Page: 1, PageSize: 50, Filter: []dbcore.FilterExpr{{Column: "BUCKET", Op: dbcore.FilterEq, Value: dbcore.ValueOf(int64(0))}},
 	})
 	if err != nil {
 		t.Fatalf("filtered: %v", err)

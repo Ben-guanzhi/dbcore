@@ -1,0 +1,15 @@
+# LF everywhere, on every platform.
+#
+# The kernel is consumed by six client repos that all run `gofmt -l` in CI, so a
+# checkout whose line endings differ from the committed bytes turns a formatting
+# gate into a false alarm. Normalising here makes a clone byte-identical.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.jpg binary
+*.gif binary
+*.db binary
+*.exe binary
+
+*.ps1 text eol=crlf
