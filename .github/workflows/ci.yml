@@ -30,7 +30,7 @@ jobs:
       # Same rationale as sqltui-main's ci.yml (see PUBLISH-BLOCKER §4.3).
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.27.1'
+          go-version-file: go.mod
 
       - name: gofmt
         run: |
