@@ -26,7 +26,7 @@
         "tableprogo": "done — toast 229 处 + 错误可复制",
         "sqltui": "done — toast 131 + 错误弹出层",
         "polydb": "done — toast 81",
-        "db-dev": "done — 状态栏",
+        "db-dev": "done — 非模态 toast + 行右键；Ctrl+Z 已接（S-02 收尾时同步，app.js 网格 keydown）",
         "fynequery": "gap — dialog.ShowError 式模态（workspace.go:882/900/918 的 tx 错误、dbpicker.go:281）；statusBar 已存在（widgets.go:1246）可承载"
       }
     },
@@ -39,7 +39,7 @@
         "dbstudio": "done — 状态栏报 connection/schema/engine/tx/rows + 工具栏 Autocommit 开关 + 只读锁（readonly.go）+ colorBand",
         "tableprogo": "done — 事务徽章 + 倒计时 + Safe Mode 指示",
         "polydb": "done — 连接健康灯 + 徽章",
-        "db-dev": "partial — 状态栏有部分模式",
+        "db-dev": "done — Safe Mode 常驻按钮（updateSafeLabel，lvl-* 着色 + 文本 glyph + title）；暂存式删除/恢复行有右键与行内按钮",
         "fynequery": "partial — statusBar 有 rows/table/columns（widgets.go:1264-1283），无 tx/mode 段",
         "sqltui": "done — app.go renderBottom：pendingEdit/pendingDelete 挂到 statusInfo.Mode（edit/delete pending 常驻文本段）。TUI 无连接级只读/事务模式，pending 状态即唯一的会话特殊态"
       }
