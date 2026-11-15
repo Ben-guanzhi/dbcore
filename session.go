@@ -39,9 +39,23 @@ type Metric struct {
 
 // RowChange pairs the primary key that identifies one row with the columns to
 // change in it. A key column that is missing means the row cannot be addressed.
+//
+// Expect turns the write into an optimistic concurrency guard: for each column
+// listed there, the UPDATE also requires the column to still hold the value the
+// client read. It is the architecture lens's lost-update defence (Red Book
+// ch13): a row someone else edited between read and write no longer matches,
+// the statement affects zero rows, and ApplyBatch reports ErrRowConflict instead
+// of silently overwriting the other writer's change.
+//
+// A client that does not track old values simply leaves Expect nil — the write
+// then behaves exactly as before (primary key only). Populating it is therefore
+// an incremental improvement, not a protocol change.
 type RowChange struct {
 	PK      map[string]Value
 	Changes map[string]Value
+	// Expect holds the values the client read for the columns it is about to
+	// change. Empty means "guard on the primary key alone".
+	Expect map[string]Value
 }
 
 // BatchRequest is one whole commit: row edits, deletions, inserts and optional

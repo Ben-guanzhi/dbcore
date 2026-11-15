@@ -308,8 +308,12 @@ func TestSessionCoreBatchRollsBackOnFailure(t *testing.T) {
 			Changes: map[string]Value{"v": {Kind: ValText, S: "y"}},
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "expected 1") {
-		t.Fatalf("want the affect-one failure, got %v", err)
+	// Zero affected rows on a row-addressed statement is reported as the typed
+	// row conflict (the row was changed or deleted since it was read), not as a
+	// bare "expected 1". The subject of this test is the rollback below; the
+	// error's wording is deliberately not pinned.
+	if !errors.Is(err, ErrRowConflict) {
+		t.Fatalf("want ErrRowConflict, got %v", err)
 	}
 	tx := sessionCoreTestLastTx()
 	if tx == nil || !tx.didRollback() || tx.didCommit() {

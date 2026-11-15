@@ -168,7 +168,7 @@ func (s *SessionCore) UpdateRow(ctx context.Context, table string, pk, changes m
 	if len(changes) == 0 {
 		return fmt.Errorf("update needs at least one column to change")
 	}
-	stmt, args := buildUpdate(s.dialect, table, pk, changes)
+	stmt, args := buildUpdate(s.dialect, table, pk, changes, nil)
 	return execAffectOne(ctx, s, stmt, args)
 }
 
@@ -206,8 +206,25 @@ func execAffectOne(ctx context.Context, s *SessionCore, stmt string, args []Valu
 // placeholders; values travel as bind args, never interpolated (P0-4). The
 // WHERE placeholders continue the SET numbering — positional dialects ($1, :1,
 // @p1) have one statement-wide sequence, not one per clause.
-func buildUpdate(d Dialect, table string, pk, changes map[string]Value) (string, []Value) {
+//
+// expect, when non-empty, appends the optimistic guard: every column the client
+// read is compared against its read value, so a row another writer changed
+// between read and write stops matching. The comparison is NULL-aware the same
+// way wherePK is (`IS NULL` rather than `= NULL`, which is never true), which
+// keeps it portable across all six dialects without a new Dialect method.
+//
+// Only columns this statement actually writes are guarded. Expect naturally
+// carries the whole row the client read, and guarding an untouched column would
+// turn a concurrent edit of some unrelated field into a conflict for no reason.
+// The filter lives here rather than in ApplyBatch so no caller can forget it.
+func buildUpdate(d Dialect, table string, pk, changes, expect map[string]Value) (string, []Value) {
 	var args []Value
+	guarded := make(map[string]Value, len(expect))
+	for col, v := range expect {
+		if _, written := changes[col]; written {
+			guarded[col] = v
+		}
+	}
 	b := &strings.Builder{}
 	b.WriteString("UPDATE ")
 	b.WriteString(d.QuoteIdent(table))
@@ -226,6 +243,53 @@ func buildUpdate(d Dialect, table string, pk, changes map[string]Value) (string,
 	args = append(args, wargs...)
 	b.WriteString(" WHERE ")
 	b.WriteString(where)
+	if guard, gargs := whereExpect(d, guarded, len(args)); guard != "" {
+		b.WriteString(" AND ")
+		b.WriteString(guard)
+		args = append(args, gargs...)
+	}
+	return b.String(), args
+}
+
+// buildUpdateGuardCount reports whether an update will carry an optimistic
+// guard, i.e. whether at least one Expect column is also written. ApplyBatch
+// uses it to decide that a zero-row result is the specific row conflict rather
+// than a plain "row is gone".
+func buildUpdateGuardCount(u RowChange) (int, bool) {
+	n := 0
+	for col := range u.Expect {
+		if _, written := u.Changes[col]; written {
+			n++
+		}
+	}
+	return n, n > 0
+}
+// whereExpect renders the optimistic guard: one predicate per column the client
+// read, in the same NULL-aware form as wherePK. Columns already pinned by the
+// primary key are skipped (the key's predicate is stricter and repeating it
+// would only add placeholders). from is the 0-based count of placeholders
+// already in the statement.
+func whereExpect(d Dialect, expect map[string]Value, from int) (string, []Value) {
+	if len(expect) == 0 {
+		return "", nil
+	}
+	var b strings.Builder
+	var args []Value
+	first := true
+	for _, col := range sortedCols(expect) {
+		if !first {
+			b.WriteString(" AND ")
+		}
+		first = false
+		b.WriteString(d.QuoteIdent(col))
+		v := expect[col]
+		if v.Kind == ValNull {
+			b.WriteString(" IS NULL")
+			continue
+		}
+		b.WriteString(" = ")
+		args = appendArg(&b, d, args, from+len(args), v)
+	}
 	return b.String(), args
 }
 
@@ -295,6 +359,13 @@ type batchStmt struct {
 	sql       string
 	args      []Value
 	ensureOne bool
+	// guarded marks a statement carrying an optimistic (old-value) predicate.
+	// Zero affected rows then means "the row no longer matches what the client
+	// read" -- a conflict to surface, not a generic failure. An unguarded
+	// statement that affects zero rows still means the row is gone; both are
+	// reported as a conflict, because from the user's chair they are the same
+	// event: someone else got there first.
+	guarded bool
 }
 
 // ApplyBatch applies a whole commit. When a manual transaction is active the
@@ -309,25 +380,29 @@ func (s *SessionCore) ApplyBatch(ctx context.Context, req BatchRequest) error {
 		if len(u.PK) == 0 || len(u.Changes) == 0 {
 			return fmt.Errorf("batch update needs a primary key and at least one change")
 		}
-		q, a := buildUpdate(s.dialect, req.Table, u.PK, u.Changes)
-		stmts = append(stmts, batchStmt{q, a, true})
+		// buildUpdate narrows Expect to the columns it writes; here we only need
+		// to know whether a guard survived so a zero-row result can be reported
+		// as the specific conflict.
+		q, a := buildUpdate(s.dialect, req.Table, u.PK, u.Changes, u.Expect)
+		_, guarded := buildUpdateGuardCount(u)
+		stmts = append(stmts, batchStmt{q, a, true, guarded})
 	}
 	for _, pk := range req.Deletes {
 		if len(pk) == 0 {
 			return fmt.Errorf("batch delete needs a primary key")
 		}
 		q, a := buildDelete(s.dialect, req.Table, pk)
-		stmts = append(stmts, batchStmt{q, a, true})
+		stmts = append(stmts, batchStmt{q, a, true, false})
 	}
 	for _, vals := range req.Inserts {
 		if len(vals) == 0 {
 			return fmt.Errorf("batch insert needs at least one column")
 		}
 		q, a := buildInsert(s.dialect, req.Table, vals)
-		stmts = append(stmts, batchStmt{q, a, false})
+		stmts = append(stmts, batchStmt{q, a, false, false})
 	}
 	for _, ddl := range req.DDL {
-		stmts = append(stmts, batchStmt{ddl, nil, false})
+		stmts = append(stmts, batchStmt{ddl, nil, false, false})
 	}
 	if len(stmts) == 0 {
 		return fmt.Errorf("empty batch")
@@ -380,14 +455,27 @@ func (s *SessionCore) ApplyBatch(ctx context.Context, req BatchRequest) error {
 }
 
 func runBatch(ctx context.Context, ex SQLTx, stmts []batchStmt) error {
-	for _, st := range stmts {
+	for i, st := range stmts {
 		affected, _, err := RunExec(ctx, ex, st.sql, st.args)
 		if err != nil {
 			return err
 		}
-		if st.ensureOne && affected != 1 {
-			return fmt.Errorf("statement affected %d rows (expected 1); the row may have been changed by another writer", affected)
+		if !st.ensureOne || affected == 1 {
+			continue
 		}
+		// Zero affected rows on a row-addressed statement is the lost-update
+		// window: either the row is gone, or -- with a guard -- one of the
+		// columns no longer holds the value the client read. Both mean some
+		// other writer got there first, so both surface as ErrRowConflict rather
+		// than as an anonymous "affected 0 rows" the UI cannot act on.
+		if affected == 0 {
+			return &Error{
+				Code: ErrCodeRowConflict,
+				Message: fmt.Sprintf("statement %d of %d matched no row: it was changed or deleted since it was read",
+					i+1, len(stmts)),
+			}
+		}
+		return fmt.Errorf("statement %d affected %d rows (expected 1)", i+1, affected)
 	}
 	return nil
 }

@@ -337,6 +337,11 @@ func (d *MSSQLDriver) BrowseRows(ctx context.Context, schema, table string, req 
 		return nil, err
 	}
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
+	if req.NoCount {
+		// Lazy paging: the pager shows an unknown total rather than paying a
+		// full-table COUNT(*) for a number nobody asked for yet.
+		return out, nil
+	}
 	cq, ca := d.dialect.BuildCountQuery(schema, table, req)
 	// The COUNT is best-effort: a permission failure or a cancelled context
 	// must not hide the rows the caller already holds. TotalFound stays false

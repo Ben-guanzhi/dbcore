@@ -217,6 +217,11 @@ type TableRowsRequest struct {
 	// Exactly one sort key is supported (the guarded deep-paging case);
 	// anything else falls back to OFFSET-based pagination via req.Page.
 	After []Value
+	// NoCount asks the driver to skip the COUNT(*) that would fill Total. A grid
+	// that pages lazily sets it: on a large table the count is the slowest part
+	// of opening a page, and the pager already renders an unknown total. Off by
+	// default so nothing changes for callers that want the number.
+	NoCount bool
 }
 
 type TableRowsResult struct {

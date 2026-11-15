@@ -385,6 +385,11 @@ func (d *DMDriver) BrowseRows(ctx context.Context, schema, table string, req *db
 	}
 	coerceNumericText(res)
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
+	if req.NoCount {
+		// Lazy paging: the pager shows an unknown total rather than paying a
+		// full-table COUNT(*) for a number nobody asked for yet.
+		return out, nil
+	}
 	cq, ca := d.dialect.BuildCountQuery(s, table, req)
 	// The count is best-effort: a permission failure must not hide the rows the
 	// caller already holds, and TotalFound stays false so "count failed" is

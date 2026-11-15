@@ -45,6 +45,13 @@ const (
 	// registry-level signal for the paper's withdrawal guard
 	// ("the provider is removed only once no consumer relies on it", §6.5/§6.6).
 	ErrCodeProviderInUse = "ERR_PROVIDER_IN_USE"
+	// ErrCodeRowConflict is returned by ApplyBatch when a row the caller wanted
+	// to update has changed since it was read (or no longer exists). The caller
+	// read the row, decided on an edit, and by the time the statement ran the
+	// row no longer matched what it had read — the lost-update window the
+	// architecture lens calls out (Red Book ch13). A client must surface this as
+	// a conflict the user resolves, never as a silent no-op.
+	ErrCodeRowConflict = "ERR_ROW_CONFLICT"
 )
 
 // Error is a typed error carrying a stable Code for cross-language matching.
@@ -55,11 +62,25 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
 
+// Is matches by stable Code, not by identity. A driver (or the batch writer)
+// returns a fresh *Error with context in the message; callers still detect the
+// sentinel with errors.Is. Without this, errors.Is(err, ErrRowConflict) would
+// only match the one shared pointer and every context-carrying error would read
+// as "not a conflict".
+func (e *Error) Is(target error) bool {
+	t, ok := target.(*Error)
+	return ok && t != nil && e != nil && e.Code == t.Code
+}
+
 // Sentinel errors. Match with errors.Is.
 var (
 	ErrNotSupported        = &Error{ErrCodeNotSupported, "operation not supported for this engine"}
 	ErrTransactionNotFound = &Error{ErrCodeTransactionNotFound, "transaction not found"}
 	ErrTransactionFailed   = &Error{ErrCodeTransactionFailed, "transaction failed"}
+	// ErrRowConflict: the row changed (or vanished) between read and write.
+	// Match with errors.Is to tell "someone else touched this row" apart from a
+	// real statement failure.
+	ErrRowConflict = &Error{ErrCodeRowConflict, "the row changed since it was read"}
 )
 
 // Driver is the base interface implemented by every engine driver.

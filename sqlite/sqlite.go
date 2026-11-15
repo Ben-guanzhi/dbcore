@@ -347,6 +347,11 @@ func (d *SQLiteDriver) BrowseRows(ctx context.Context, schema, table string, req
 		return nil, err
 	}
 	out := &dbcore.TableRowsResult{Columns: res.Columns, Rows: res.Rows}
+	if req.NoCount {
+		// Lazy paging: the pager shows an unknown total rather than paying a
+		// full-table COUNT(*) for a number nobody asked for yet.
+		return out, nil
+	}
 	cq, ca := d.dialect.BuildCountQuery(schema, table, req)
 	if cres, cerr := dbcore.RunQuery(ctx, d.db, cq, ca); cerr == nil && len(cres.Rows) > 0 {
 		// Kind-aware: modernc may deliver the count as int64 or text —
