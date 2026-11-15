@@ -264,6 +264,7 @@ func buildUpdateGuardCount(u RowChange) (int, bool) {
 	}
 	return n, n > 0
 }
+
 // whereExpect renders the optimistic guard: one predicate per column the client
 // read, in the same NULL-aware form as wherePK. Columns already pinned by the
 // primary key are skipped (the key's predicate is stricter and repeating it
