@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -210,7 +211,7 @@ func TestConsumersKeepTheIntegrationTheyClaim(t *testing.T) {
 						c.name, got, c.dbcoreImportDirs, c.doc)
 				}
 			}
-			if err := requireLocalReplace(root); err != nil {
+			if err := requirePublishedDependency(root); err != nil {
 				t.Errorf("%s: %v", c.name, err)
 			}
 		})
@@ -310,15 +311,36 @@ func dirsImportingDBCore(t *testing.T, root string) []string {
 	return out
 }
 
-// requireLocalReplace 校验消费者的 go.mod 仍用 replace 指向工作区里的 dbcore:
-// 内核尚未发布, 去掉 replace 后本地构建会失败。
-func requireLocalReplace(root string) error {
+// requirePublishedDependency 校验消费者的 go.mod 依赖的是**已发布的版本化
+// 内核**，而不是本地 replace。
+//
+// 波 100 续九之前内核声明的是占位路径 github.com/dbcore/dbcore，与托管地
+// 不符，go get 永不成立，消费者只能靠 `replace ../dbcore` 在 CI 里克隆兄弟
+// 目录。内核按真实路径发了 v0.2.0 之后，replace 反而成了缺陷：它让 CI 编译
+// 的不是外人拿到的东西，也让 `go install` 不可能。所以断言从「必须有
+// replace」翻转为「必须有带版本号的 require，且不得有 replace」。
+func requirePublishedDependency(root string) error {
 	b, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(string(b), "github.com/Ben-guanzhi/dbcore =>") {
-		return fmt.Errorf("go.mod 缺少 `replace github.com/Ben-guanzhi/dbcore => ...`: 内核尚未发布, 去掉 replace 后本地无法构建")
+	src := string(b)
+
+	if strings.Contains(src, "replace github.com/Ben-guanzhi/dbcore") {
+		return fmt.Errorf("go.mod 仍用 `replace github.com/Ben-guanzhi/dbcore => ...`: 内核已发布 v0.2.0, " +
+			"replace 会让 CI 编译的不是外人 clone 得到的东西")
+	}
+
+	// A real version looks like v0.2.0 / v1.2.3; the placeholder forms v0.0.0
+	// and v0.0.0-00010101000000-000000000000 mean "unresolvable without replace".
+	re := regexp.MustCompile(`github\.com/Ben-guanzhi/dbcore (v\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-+]+)?)`)
+	m := re.FindStringSubmatch(src)
+	if m == nil {
+		return fmt.Errorf("go.mod 缺少 `require github.com/Ben-guanzhi/dbcore vX.Y.Z`: 内核已发布, " +
+			"应依赖版本化模块而不是占位版本")
+	}
+	if m[1] == "v0.0.0" || strings.Contains(m[1], "00010101000000") {
+		return fmt.Errorf("go.mod 依赖的是占位版本 %s: 应改为已发布的真实 tag(如 v0.2.0)", m[1])
 	}
 	return nil
 }
