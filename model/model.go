@@ -75,6 +75,26 @@ func (m *Model) pkOf(e *Entity) []string {
 	return nil
 }
 
+// existsEntity 报告实体是否存在。
+func (m *Model) existsEntity(name string) bool {
+	_, ok := m.entity(name)
+	return ok
+}
+
+// hasColumn 报告实体里是否有这一列。
+func (m *Model) hasColumn(entity, col string) bool {
+	e, ok := m.entity(entity)
+	if !ok {
+		return false
+	}
+	for _, c := range e.Columns {
+		if strings.EqualFold(c.Name, col) {
+			return true
+		}
+	}
+	return false
+}
+
 // GenerateDDL 把模型生成建表语句（按依赖序：被引用的表先建；N:M 关联表
 // 附在最后）。
 //
