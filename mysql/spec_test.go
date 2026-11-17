@@ -36,8 +36,8 @@ func TestDSNBuildsEscapedConfig(t *testing.T) {
 	if !cfg.ParseTime {
 		t.Error("ParseTime should be enabled so timestamps scan into time.Time")
 	}
-	if cfg.TLSConfig != "true" {
-		t.Errorf("TLSConfig = %q, want true for SSLMode=require", cfg.TLSConfig)
+	if cfg.TLSConfig != "skip-verify" {
+		t.Errorf("TLSConfig = %q, want skip-verify for SSLMode=require", cfg.TLSConfig)
 	}
 	if got := cfg.Params["sql_mode"]; got != "ANSI_QUOTES" {
 		t.Errorf("sql_mode param = %q", got)
@@ -58,12 +58,16 @@ func TestDSNDefaultPort(t *testing.T) {
 }
 
 func TestTLSModeMapping(t *testing.T) {
+	// portable 契约（见 dbcore.ConnSpec.SSLMode 的文档）：require 只保证加密，
+	// 不验证证书；严格验证走 verify-ca / verify-full。go-sql-driver 里
+	// skip-verify = 加密 + 不验证，tls=true = 加密 + 验证。
 	cases := map[string]string{
 		"":            "",
 		"disable":     "",
 		"preferred":   "preferred",
-		"require":     "true",
+		"require":     "skip-verify",
 		"verify-full": "true",
+		"verify-ca":   "true",
 		"skip-verify": "skip-verify",
 	}
 	for mode, want := range cases {

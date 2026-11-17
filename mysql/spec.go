@@ -23,10 +23,13 @@ func tlsParam(mode string) string {
 	case "allow", "preferred":
 		return "preferred"
 	case "require", "true", "on":
-		// MySQL's tls=true verifies the server certificate; "skip-verify" is the
-		// usual choice for self-signed servers, so "require" stays strict here.
-		return "true"
+		// portable 契约：require = 加密但容忍自签名证书（与 postgres 的
+		// sslmode=require、mssql 的 TrustServerCertificate=true 等价）。
+		// go-sql-driver 的 skip-verify 正是「加密 + 不验证证书」；它的
+		// tls=true 反而会验证——用它会让同一个 require 在引擎间行为不同。
+		return "skip-verify"
 	case "verify-ca", "verify-full":
+		// 严格验证：tls=true 用系统根证书校验服务器证书。
 		return "true"
 	case "skip-verify", "insecure":
 		return "skip-verify"

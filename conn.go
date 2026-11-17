@@ -44,7 +44,20 @@ type ConnSpec struct {
 	// File is the SQLite database path; "" means an in-memory database.
 	File string
 	// SSLMode is the portability layer for TLS: "disable", "require",
-	// "verify-ca", "verify-full" or engine-specific values ("" = engine default).
+	// SSLMode 是 TLS 的可移植层，跨引擎同一拼写应当同一语义：
+	//
+	//	""/"disable"/"false"/"off"  不加密
+	//	"require"/"true"/"on"       加密，但**容忍自签名/不可信证书**
+	//	"verify-ca"                 加密 + 校验签发链
+	//	"verify-full"               加密 + 校验签发链与主机名（最严）
+	//	"prefer"/"preferred"/"allow" 优先加密，服务器不支持则回落明文
+	//	"skip-verify"/"insecure"    同 require（显式写法）
+	//
+	// **require 不是「验证证书」**：它只保证链路加密。想验证证书必须用
+	// verify-ca / verify-full —— 这与 libpq 的 sslmode、MSSQL 的
+	// TrustServerCertificate 语义一致，也是用户从 PG 切到 MySQL 时不会突然
+	// 撞上证书错误的原因。（`tls=true` 那种「require 就验证」的映射会让同一
+	// 配置名在引擎间行为不同，已避免。）
 	SSLMode string
 	// Params carries engine-specific extras (e.g. "charset", "application_name").
 	// Values are appended verbatim to the DSN, so they must already be escaped.
