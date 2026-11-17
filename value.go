@@ -272,8 +272,47 @@ var numericByteTypes = map[string]bool{
 	"FLOAT": true, "DOUBLE": true,
 }
 
-// valueForColumn converts a scanned value using the column's catalog type.
+// MaxCellRunes 上限一个单元格的字符数（1 Mi）。行数各有上限（AdHocRowLimit /
+// MaxRows 等），但**一个巨大的 TEXT / BLOB 单值**能绕过行数限制撑爆内存——
+// 六仓的客户端都会把整值读进内存再渲染。
+//
+// 超出部分截断，并在末尾标明原长：值本身仍可见首段（可判断是什么、可复制），
+// 不会让客户端静默拿到一个「看起来完整」的残缺值。
+const MaxCellRunes = 1 << 20
+
+// ClipCell 按 rune 截断超长文本（不切半个多字节字符），并在末尾标明被截断。
+// 未超长时原样返回（零分配路径）。
+func ClipCell(s string) string {
+	if len(s) <= MaxCellRunes {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= MaxCellRunes {
+		return s
+	}
+	return string(r[:MaxCellRunes]) + fmt.Sprintf("… (单元格已截断，原长 %d 字符)", len(r))
+}
+
+// valueForColumn converts a scanned value using the column's catalog type, then
+// clips oversized text (see MaxCellRunes) — one chokepoint, so every driver and
+// every client gets the same bound.
 func valueForColumn(v any, typeName string) Value {
+	return clipValueText(rawValueForColumn(v, typeName))
+}
+
+// clipValueText 把超长文本值收进 MaxCellRunes（只动 ValText / ValDecimal 的 S）。
+func clipValueText(val Value) Value {
+	switch val.Kind {
+	case ValText, ValDecimal:
+		if len(val.S) > MaxCellRunes {
+			val.S = ClipCell(val.S)
+		}
+	}
+	return val
+}
+
+// rawValueForColumn converts a scanned value using the column's catalog type.
+func rawValueForColumn(v any, typeName string) Value {
 	val := nativeToValue(v)
 	upper := strings.ToUpper(typeName)
 	// Exact-decimal columns: bytes or text become ValDecimal when the digits
