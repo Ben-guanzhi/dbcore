@@ -138,10 +138,13 @@ var claims = []consumerClaim{
 			"dbcore.TxManager",   // 事务管理迁内核的标志 (未接入)
 			"dbcore.SessionCore", // 宽会话实现是内核驱动内部细节, 消费者不得引用
 		},
+		// 2026-11-18 接入: internal/ui/popup 引根包只为 ProcessLister/
+		// ServerProcess 类型（:procs 会话面板的桥 internal/ui/procs.go）——
+		// 能力消费仍走 internal/db/core 的适配器。
 		dbcoreImportDirs: []string{
 			"internal/db/core", "internal/db/mysqlbe", "internal/db/postgresbe",
 			"internal/db/sqlserverbe", "internal/db/oraclebe", "internal/db/sqlitebe",
-			"internal/db/redisbe",
+			"internal/db/redisbe", "internal/ui/popup", "internal/ui",
 		},
 	},
 	{
