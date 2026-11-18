@@ -49,6 +49,27 @@ func DropColumn(dbType, schema, table, column string) string {
 // appending a column, so every other column change is a table rebuild, which is
 // a different (and destructive) operation that this package will not pretend to
 // emit.
+// RenameColumn renders the statement renaming one column of a table. The
+// standard spelling (ALTER TABLE ... RENAME COLUMN) is what MySQL 8+,
+// PostgreSQL, SQL Server and modern SQLite all accept; MySQL 5.x wants
+// "ALTER TABLE ... CHANGE old new <full definition>", which needs the column's
+// whole definition — out of reach of a name-only renderer, so that old engine
+// is refused rather than guessed at. SQLite before 3.25 has no RENAME COLUMN
+// at all; modern builds do, and that is what ships today.
+func RenameColumn(dbType, schema, table, old, next string) (string, error) {
+	if strings.TrimSpace(old) == "" || strings.TrimSpace(next) == "" {
+		return "", fmt.Errorf("rename column needs both the old and the new name")
+	}
+	switch sqltext.Normalize(dbType) {
+	case sqltext.MySQL, sqltext.Postgres, sqltext.SQLServer, sqltext.SQLite:
+		object := tableName(dbType, schema, table)
+		return fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s",
+			object, ident(dbType, old), ident(dbType, next)), nil
+	}
+	return "", fmt.Errorf("%s 不支持 ALTER TABLE ... RENAME COLUMN（MySQL 5.x 需要完整列定义的 CHANGE，请手工处理）",
+		sqltext.Normalize(dbType))
+}
+
 func CanAlterColumn(dbType string) bool {
 	return sqltext.Normalize(dbType) != sqltext.SQLite
 }
