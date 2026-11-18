@@ -18,9 +18,18 @@ import (
 	"time"
 )
 
+// DictionarySource 是数据字典需要的 catalog 子集。SQLDriver 天然满足；
+// 客户端不必为了导出字典实现整个 SQLDriver——把 Session 的目录能力包成
+// 这三个方法即可（fynequery 的插件会话就是这样接入的）。
+type DictionarySource interface {
+	ListTables(ctx context.Context, schema string) ([]TableInfo, error)
+	ListColumns(ctx context.Context, schema, table string) ([]ColumnInfo, error)
+	ListForeignKeys(ctx context.Context, schema, table string) ([]ForeignKeyInfo, error)
+}
+
 // ExportDictionary 把一个 schema 的结构导出为 Markdown 数据字典。
 // tables 为空 = 全部 base table。
-func ExportDictionary(ctx context.Context, drv SQLDriver, schema string, tables []string) (string, error) {
+func ExportDictionary(ctx context.Context, drv DictionarySource, schema string, tables []string) (string, error) {
 	objs, err := drv.ListTables(ctx, schema)
 	if err != nil {
 		return "", fmt.Errorf("列出表: %w", err)
