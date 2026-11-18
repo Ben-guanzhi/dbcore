@@ -172,6 +172,10 @@ var claims = []consumerClaim{
 			"dbcore.TxManager",  // 事务迁内核的标志 (未迁)
 		},
 		dbcoreImportDirs: []string{
+			// "." 是根目录的 dictionary.go（数据字典导出）——用内核
+			// ExportDictionary + NewFromDB 包装已开的 *sql.DB（只此一处，
+			// 不扩展解冻边界：连接生命周期/池/隧道仍留客户端）。
+			".",
 			"internal/db", "internal/db/drivers/postgres",
 			"internal/db/drivers/sqlite", "internal/db/drivers/sqlserver",
 		},
