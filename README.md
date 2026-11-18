@@ -6,11 +6,11 @@ polydb、sqlgpui 的契约基线）都用它，所以「同一个 SQL 在不同�
 「一次浏览怎么翻页」「一个驱动错误是什么」只在这里定义一次。
 
 ```go
-require github.com/Ben-guanzhi/dbcore v0.2.0
+require github.com/Ben-guanzhi/dbcore v0.11.0
 ```
 
 ```sh
-go get github.com/Ben-guanzhi/dbcore@v0.2.0
+go get github.com/Ben-guanzhi/dbcore@v0.11.0
 ```
 
 没有外部服务、没有 cgo：`go build ./...` 在干净 clone 上就能过。
@@ -32,6 +32,16 @@ go get github.com/Ben-guanzhi/dbcore@v0.2.0
 | `fuzzy` | 模糊筛选（子串/分词），供表格过滤 |
 | `drivertest` | 引擎契约套件：`Harness` 给内核驱动用，`Spec` 让客户端把手里的 `Open` 交出来跑同一套断言 |
 | `contract` | 契约测试的共享夹具 |
+| `sqlformat` | SQL 美化器（分词 + 关键字大写 + 子句独占缩行；正确的 SQL 原样往返）——dbstudio / sqlgpui / db-dev 共用一份实现 |
+| `sqltext` 的查询构建器 | `SelectSpec` + `BuildSelect`：JOIN/聚合/嵌套条件/GROUP/ORDER/LIMIT 的纯函数生成（可视化查询构建器的数据模型） |
+| `processes` | `ProcessLister` 能力：列出/终止服务器会话（MySQL PROCESSLIST+KILL、PG pg_stat_activity、MSSQL dm_exec_requests）；ID 校验内核收口 |
+| `servervars` | `ServerVariablesReader` 能力：只读列出系统变量（三方言；**不含改值**——SET GLOBAL 的副作用边界写进接口文档） |
+| `users` | `UserAdmin` 能力：列出可登录用户 + Create/Drop/Grant 的 DDL 生成（**执行归客户端闸门**） |
+| `datagen` | `GenerateRows` / `GenerateInserts`：类型驱动的确定性测试数据 + 方言 INSERT（tinyint(1) 布尔优先、列名猜语义） |
+| `transfer` | `TransferTable`：跨连接整表搬运（分页拉取 → 按列名对齐 → 逐批 ApplyBatch + 进度回调） |
+| `model` | 模型设计正向工程：ER 模型（可序列化 JSON）→ 方言 DDL（依赖拓扑序、N:M 关联表、类型映射） |
+| `value` 的单元格上限 | `MaxCellRunes` / `ClipCell`：超长 TEXT/BLOB 单值按 rune 截断并标明原长（valueForColumn 收口，五客户端共用） |
+| `sqlformat` 的工具链 | `toolchain go1.27.3`（TableProGo 显式声明）——stdlib 条目随编译工具链走 |
 | `plugindriver` | 插件宿主：newline-JSON 上的「一进程一连接」(`Driver`) 与「一进程多连接」(`ConnDriver`)，含 banner 握手、取消、流式。`consoleplugin/` 是独立子模块的参考插件（非 SQL 控制台），它带 Kafka 依赖，刻意隔离 |
 | `usability` | 跨客户端可用性指标（S-01）：任务/结果/耗时/回退。默认关闭，只在 `POLYDB_USABILITY=1` 时落本地 NDJSON，上限 1 MiB，不上传 |
 | `spec/` | 机器可读契约：`a11y-baseline.json`（可及性基线）、`interaction-baseline.json`（交互基线）、`usability-metrics.json`（可用性事件形状）、`vectors/`（方言向量语料）。每个客户端用自己语言的原生测试读同一份 |
