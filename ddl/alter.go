@@ -200,6 +200,20 @@ func AlterColumn(dbType, schema, table string, from, to Column) ([]string, strin
 
 // CreateIndex renders CREATE [UNIQUE] INDEX for a secondary index. Primary keys
 // are not indexes here — they are table constraints, see AddPrimaryKey.
+// DropView renders DROP VIEW for one object. `quoted` must already carry
+// the engine's own quoting (built by QualifiedName/QuoteIdent with the
+// caller's namespace rules). MySQL/PostgreSQL/SQLite/Oracle accept
+// "DROP VIEW IF EXISTS"; SQL Server has no IF EXISTS for views, so its
+// object-catalog guard is emitted instead (the same spelling the driver
+// contract fixtures use).
+func DropView(dbType, quoted string) string {
+	if sqltext.Normalize(dbType) == sqltext.SQLServer {
+		bare := strings.Trim(quoted, "[]")
+		return fmt.Sprintf("IF OBJECT_ID('%s', 'V') IS NOT NULL DROP VIEW %s", bare, quoted)
+	}
+	return "DROP VIEW IF EXISTS " + quoted
+}
+
 func CreateIndex(dbType, schema, table string, idx Index) string {
 	unique := ""
 	if idx.Unique {
