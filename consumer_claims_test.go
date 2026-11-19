@@ -145,6 +145,9 @@ var claims = []consumerClaim{
 			"internal/db/core", "internal/db/mysqlbe", "internal/db/postgresbe",
 			"internal/db/sqlserverbe", "internal/db/oraclebe", "internal/db/sqlitebe",
 			"internal/db/redisbe", "internal/ui/popup", "internal/ui",
+			// §328: internal/db 的 Backend.RunMulti 能力接入层直接引根包
+			// （dbcore.AsMultiResult 检测驱动的多结果集能力）。
+			"internal/db",
 		},
 	},
 	{

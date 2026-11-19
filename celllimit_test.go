@@ -63,3 +63,37 @@ func TestValueForColumnKeepsNumbers(t *testing.T) {
 		t.Errorf("浮点被改动: %+v", got)
 	}
 }
+
+// 二进制列走同一个取值出口：超长 BLOB 按字节截断并携带原长标注，
+// 短 BLOB 原样保留（截断逻辑不误伤正常数据）。
+func TestValueForColumnClipsHugeBlob(t *testing.T) {
+	huge := make([]byte, MaxBlobBytes+1024)
+	for i := range huge {
+		huge[i] = byte(i % 251)
+	}
+	got := valueForColumn(huge, "BLOB")
+	if got.Kind != ValBlob {
+		t.Fatalf("kind = %v, want ValBlob", got.Kind)
+	}
+	if len(got.B) != MaxBlobBytes {
+		t.Fatalf("blob len = %d, want capped at %d", len(got.B), MaxBlobBytes)
+	}
+	if !strings.Contains(got.S, "已截断") || !strings.Contains(got.S, "原长") {
+		t.Errorf("截断没有携带原长标注: %q", got.S)
+	}
+	// 内容是前缀（未被改写）。
+	if got.B[0] != 0 || got.B[MaxBlobBytes-1] != byte((MaxBlobBytes-1)%251) {
+		t.Error("截断破坏了前缀内容")
+	}
+}
+
+func TestValueForColumnKeepsShortBlob(t *testing.T) {
+	small := []byte{1, 2, 3, 4}
+	got := valueForColumn(small, "BLOB")
+	if got.Kind != ValBlob || len(got.B) != 4 {
+		t.Fatalf("short blob mangled: kind=%v len=%d", got.Kind, len(got.B))
+	}
+	if got.S != "" {
+		t.Errorf("未截断的 BLOB 不该带标注: %q", got.S)
+	}
+}

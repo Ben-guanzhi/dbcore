@@ -300,12 +300,27 @@ func valueForColumn(v any, typeName string) Value {
 	return clipValueText(rawValueForColumn(v, typeName))
 }
 
-// clipValueText 把超长文本值收进 MaxCellRunes（只动 ValText / ValDecimal 的 S）。
+// MaxBlobBytes 上限一个二进制单元格的字节数（1 Mi，与 MaxCellRunes 同刻度）。
+// 显示侧从不渲染二进制本体（只显示 <blob N bytes> 与预览入口），所以超过
+// 上限的尾巴对用户不可见——但读取路径却会把整块物化进内存再传给 JSON。
+const MaxBlobBytes = 1 << 20
+
+// clipValueText 把超长值收进上限：ValText / ValDecimal 按 rune 截 S；ValBlob
+// 按字节截 B。一个 500MB 的 BLOB 之前会完整物化进 QueryResult——单元格
+// 上限只护了文本列，二进制列的乘积（行数 × 单元格字节）无防。
 func clipValueText(val Value) Value {
 	switch val.Kind {
 	case ValText, ValDecimal:
 		if len(val.S) > MaxCellRunes {
 			val.S = ClipCell(val.S)
+		}
+	case ValBlob:
+		if len(val.B) > MaxBlobBytes {
+			total := len(val.B)
+			val.B = val.B[:MaxBlobBytes]
+			// S 只在截断时携带标注：显示侧用 B 的字节数渲染 <blob>，
+			// 不带这句，"这列本来就只有 1Mi" 就无从证伪。
+			val.S = fmt.Sprintf("（二进制单元格已截断，原长 %d 字节）", total)
 		}
 	}
 	return val
