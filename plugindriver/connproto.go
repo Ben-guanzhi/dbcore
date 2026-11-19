@@ -16,6 +16,7 @@ package plugindriver
 // plugin written for one works with the other host unchanged.
 
 import (
+	"strings"
 	"encoding/json"
 	"fmt"
 
@@ -351,14 +352,45 @@ func DecodeConnColumn(raw json.RawMessage) ([]dbcore.ColumnInfo, error) {
 
 // ConnActionParam describes one input a console action wants. The host renders a
 // field for it and sends the value back by Name — it does not interpret Kind, which
-// is only a hint for which control to draw ("text", "number", "textarea", "select").
-// Optional carries a JSON-encoded default so a select can offer choices.
+// is only a hint for which control to draw ("text", "number", "textarea", "select",
+// "checkbox"). Kind is a hint, never a security boundary: the plugin owns the
+// action's contract and must validate every argument itself.
+//
+// Every field added after the original four is omitempty, so an old plugin's
+// JSON decodes with zero values and an old host ignores a new plugin's hints.
+// This is the additive-evolution contract of the action protocol.
 type ConnActionParam struct {
-	Name     string `json:"name"`
-	Label    string `json:"label,omitempty"`
-	Kind     string `json:"kind,omitempty"`
-	Required bool   `json:"required,omitempty"`
-	Default  string `json:"default,omitempty"`
+	Name string `json:"name"`
+	Label string `json:"label,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	Required bool `json:"required,omitempty"`
+	Default string `json:"default,omitempty"`
+	// Options is the direct spelling of a select's choices. An older plugin
+	// may put a JSON array in Default instead; the host accepts both.
+	Options []string `json:"options,omitempty"`
+	// Help is a one-line explanation rendered beside the field.
+	Help string `json:"help,omitempty"`
+	// Rows is the visible height of a textarea (0 = host default).
+	Rows int `json:"rows,omitempty"`
+	// Multiple lets a select return a JSON array of chosen values.
+	Multiple bool `json:"multiple,omitempty"`
+}
+
+// ParamOptions resolves a select's choices from either the direct Options
+// field or the legacy JSON-encoded Default. The latter keeps older plugins
+// working without a protocol version bump.
+func (p ConnActionParam) ParamOptions() []string {
+	if len(p.Options) > 0 {
+		return p.Options
+	}
+	if strings.TrimSpace(p.Default) == "" {
+		return nil
+	}
+	var out []string
+	if json.Unmarshal([]byte(p.Default), &out) == nil {
+		return out
+	}
+	return nil
 }
 
 // ConnAction is one console action a plugin offers on a connection: a vector search,
