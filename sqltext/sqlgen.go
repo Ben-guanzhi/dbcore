@@ -693,3 +693,47 @@ func mustQuote(dbType, name string) string {
 	}
 	return q
 }
+
+// ToggleLineComment adds or removes a leading "-- " on one SQL line, keeping
+// any indentation intact. 收编自 fynequery（§346 快捷键审计：Ctrl+/ 是 SQL
+// 客户端的标准绑定，注释切换的行内语义各仓共用）。
+func ToggleLineComment(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(trimmed)]
+	switch {
+	case strings.HasPrefix(trimmed, "-- "):
+		return indent + trimmed[3:]
+	case strings.HasPrefix(trimmed, "--"):
+		return indent + strings.TrimPrefix(trimmed[2:], " ")
+	default:
+		return indent + "-- " + trimmed
+	}
+}
+
+// ToggleLinesComment 对多行选区逐行切换注释。成熟产品的语义：整块里存在
+// 至少一行未注释（按去缩进后判断）时全部加注释，否则全部移除——整块一致，
+// 不留一半注释一半代码的选区。
+func ToggleLinesComment(lines []string) []string {
+	anyUncommented := false
+	for _, l := range lines {
+		trimmed := strings.TrimLeft(l, " \t")
+		if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
+			anyUncommented = true
+			break
+		}
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		if anyUncommented {
+			// 空行不加注释（成熟产品同款：注释整块时跳过空行）。
+			if strings.TrimSpace(l) == "" {
+				out[i] = l
+				continue
+			}
+			out[i] = ToggleLineComment(l)
+		} else {
+			out[i] = ToggleLineComment(l)
+		}
+	}
+	return out
+}
