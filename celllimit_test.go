@@ -97,3 +97,27 @@ func TestValueForColumnKeepsShortBlob(t *testing.T) {
 		t.Errorf("未截断的 BLOB 不该带标注: %q", got.S)
 	}
 }
+
+// PG 扩展文本类型（lib/pq 扫成 []byte 的那些）必须归一成文本：
+// jsonb/inet/cidr 的网格显示是内容本身，不是 "<blob N bytes>"。
+func TestValueForColumnNormalizesPostgresTextExtensions(t *testing.T) {
+	cases := []struct {
+		typeName string
+		payload  string
+	}{
+		{"JSONB", `{"k": 1}`},
+		{"jsonb", `[1,2,3]`},
+		{"INET", "192.168.1.10"},
+		{"CIDR", "10.0.0.0/8"},
+		{"MACADDR", "08:00:2b:01:02:03"},
+	}
+	for _, c := range cases {
+		got := valueForColumn([]byte(c.payload), c.typeName)
+		if got.Kind != ValText {
+			t.Errorf("%s: kind = %v, want ValText", c.typeName, got.Kind)
+		}
+		if got.S != c.payload {
+			t.Errorf("%s: text = %q, want %q", c.typeName, got.S, c.payload)
+		}
+	}
+}

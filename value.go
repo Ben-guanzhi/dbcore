@@ -231,8 +231,11 @@ func nativeToValue(v any) Value {
 var textColumnTypes = map[string]bool{
 	"CHAR": true, "VARCHAR": true, "TINYTEXT": true, "TEXT": true,
 	"MEDIUMTEXT": true, "LONGTEXT": true, "NCHAR": true, "NVARCHAR": true,
-	"NTEXT": true, "ENUM": true, "SET": true, "JSON": true,
+	"NTEXT": true, "ENUM": true, "SET": true, "JSON": true, "JSONB": true,
 	"CITEXT": true, "NAME": true, "UUID": true,
+	// PostgreSQL 扩展文本类型：lib/pq 把它们扫成 []byte（驱动端无结构化
+	// 解码），不归一就是网格里的 "<blob N bytes>"——而它们的本体是文本。
+	"INET": true, "CIDR": true, "MACADDR": true, "MACADDR8": true,
 	"VARCHAR2": true, "NVARCHAR2": true, "CLOB": true, "NCLOB": true, "LONG": true,
 }
 
