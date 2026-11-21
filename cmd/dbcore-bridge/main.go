@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	// 各引擎包 import 即注册工厂（sidecar 支持全部内置引擎的拨号）。
@@ -67,6 +68,58 @@ func main() {
 // bridgeActions 是 sidecar 声明的能力清单（ListActions 返回）。
 func bridgeActions() []plugindriver.ConnAction {
 	return []plugindriver.ConnAction{
+		{
+			ID:     "transfer",
+			Title:  "整表数据传输",
+			Group:  "内核能力",
+			Danger: true,
+			Params: []plugindriver.ConnActionParam{
+				{Name: "src_kind", Label: "源引擎", Required: true},
+				{Name: "src_file", Label: "源文件（SQLite）"},
+				{Name: "src_host", Label: "源主机"},
+				{Name: "src_port", Label: "源端口", Kind: "number"},
+				{Name: "src_user", Label: "源用户"},
+				{Name: "src_password", Label: "源密码"},
+				{Name: "src_database", Label: "源库"},
+				{Name: "dst_kind", Label: "目标引擎", Required: true},
+				{Name: "dst_file", Label: "目标文件（SQLite）"},
+				{Name: "dst_host", Label: "目标主机"},
+				{Name: "dst_port", Label: "目标端口", Kind: "number"},
+				{Name: "dst_user", Label: "目标用户"},
+				{Name: "dst_password", Label: "目标密码"},
+				{Name: "dst_database", Label: "目标库"},
+				{Name: "table", Label: "表名", Required: true},
+				{Name: "batch", Label: "每批行数", Kind: "number", Default: "200"},
+			},
+		},
+		{
+			ID:    "sessions",
+			Title: "服务器会话列表",
+			Group: "内核能力",
+			Params: []plugindriver.ConnActionParam{
+				{Name: "kind", Label: "引擎", Required: true, Options: []string{"mysql", "postgres", "sqlserver", "sqlite", "oracle", "dm"}},
+				{Name: "host", Label: "主机", Required: true},
+				{Name: "port", Label: "端口", Kind: "number"},
+				{Name: "user", Label: "用户"},
+				{Name: "password", Label: "密码"},
+				{Name: "database", Label: "数据库"},
+			},
+		},
+		{
+			ID:     "kill",
+			Title:  "终止服务器会话",
+			Group:  "内核能力",
+			Danger: true,
+			Params: []plugindriver.ConnActionParam{
+				{Name: "kind", Label: "引擎", Required: true},
+				{Name: "host", Label: "主机", Required: true},
+				{Name: "port", Label: "端口", Kind: "number"},
+				{Name: "user", Label: "用户"},
+				{Name: "password", Label: "密码"},
+				{Name: "database", Label: "数据库"},
+				{Name: "pid", Label: "会话 ID", Required: true},
+			},
+		},
 		{
 			ID:    "datagen",
 			Title: "生成测试数据",
@@ -140,11 +193,19 @@ func runAction(req plugindriver.Request) plugindriver.Response {
 	if err := json.Unmarshal(mustJSON(req.Params), &p); err != nil {
 		return plugindriver.Response{Error: err.Error()}
 	}
+	// transfer 用源/目标两套连接参数（src_/dst_ 前缀），不经外层的单连接
+	// kind 检查与拨号。
+	if p.Action == "transfer" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		return actionTransfer(ctx, p.Args)
+	}
 	if argString(p.Args, "kind") == "" {
 		return plugindriver.Response{Error: "缺少 kind 参数（mysql/postgres/sqlserver/sqlite/oracle/dm）"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	// （transfer 已在上方特判分发。）
 	drv, err := openDriver(ctx, p.Args)
 	if err != nil {
 		return plugindriver.Response{Error: "拨号失败: " + err.Error()}
@@ -154,6 +215,10 @@ func runAction(req plugindriver.Request) plugindriver.Response {
 	switch p.Action {
 	case "datagen":
 		return actionDataGen(ctx, drv, p.Args)
+	case "sessions":
+		return actionSessions(ctx, drv)
+	case "kill":
+		return actionKill(ctx, drv, p.Args)
 	default:
 		return plugindriver.Response{Error: "unknown action: " + p.Action}
 	}
@@ -184,6 +249,96 @@ func actionDataGen(ctx context.Context, drv dbcore.SQLDriver, args map[string]an
 	return plugindriver.Response{Result: mustJSON(&plugindriver.ConnQueryResult{
 		Columns: []plugindriver.ConnColumn{{Name: "inserted"}, {Name: "table"}, {Name: "seed"}},
 		Rows:    [][]any{{executed, table, seed}},
+	})}
+}
+
+// actionSessions 列出活动会话（ProcessLister 能力；SQLite 无此能力——
+// 能力断言失败返回明确信息）。
+// actionTransfer 用内核 TransferTable 把源表数据搬到目标同名表：
+// 源/目标各拨一个连接（sidecar 无状态——连接生命周期就在这次 action 里）。
+func actionTransfer(ctx context.Context, args map[string]any) plugindriver.Response {
+	table := argString(args, "table")
+	if table == "" {
+		return plugindriver.Response{Error: "缺少 table 参数"}
+	}
+	srcArgs := prefixedArgs(args, "src_")
+	dstArgs := prefixedArgs(args, "dst_")
+	if argString(srcArgs, "kind") == "" || argString(dstArgs, "kind") == "" {
+		return plugindriver.Response{Error: "缺少 src_kind / dst_kind 参数"}
+	}
+	src, err := openDriver(ctx, srcArgs)
+	if err != nil {
+		return plugindriver.Response{Error: "源连接失败: " + err.Error()}
+	}
+	defer src.Close()
+	dst, err := openDriver(ctx, dstArgs)
+	if err != nil {
+		return plugindriver.Response{Error: "目标连接失败: " + err.Error()}
+	}
+	defer dst.Close()
+
+	batch := int(argInt(args, "batch", 0))
+	transferred, err := dbcore.TransferTable(ctx, src, dst,
+		dbcore.TransferSpec{Table: table, BatchSize: batch}, nil)
+	if err != nil {
+		return plugindriver.Response{Error: fmt.Sprintf("传输中止（已传 %d 行）: %v", transferred, err)}
+	}
+	return plugindriver.Response{Result: mustJSON(&plugindriver.ConnQueryResult{
+		Columns: []plugindriver.ConnColumn{{Name: "transferred"}, {Name: "table"}},
+		Rows:    [][]any{{transferred, table}},
+	})}
+}
+
+// prefixedArgs 抽出带前缀的参数子集（去掉前缀），供第二组连接参数复用
+// openDriver 的同一套解析。
+func prefixedArgs(args map[string]any, prefix string) map[string]any {
+	out := map[string]any{}
+	for k, v := range args {
+		if strings.HasPrefix(k, prefix) {
+			out[strings.TrimPrefix(k, prefix)] = v
+		}
+	}
+	return out
+}
+
+func actionSessions(ctx context.Context, drv dbcore.SQLDriver) plugindriver.Response {
+	pl, ok := dbcore.AsProcessLister(drv)
+	if !ok {
+		return plugindriver.Response{Error: "该引擎不支持会话管理（ProcessLister 未实现）"}
+	}
+	procs, err := pl.Processes(ctx)
+	if err != nil {
+		return plugindriver.Response{Error: err.Error()}
+	}
+	cols := []plugindriver.ConnColumn{
+		{Name: "id"}, {Name: "user"}, {Name: "client"}, {Name: "db"},
+		{Name: "state"}, {Name: "command"}, {Name: "time"},
+	}
+	var rows [][]any
+	for _, pr := range procs {
+		rows = append(rows, []any{pr.ID, pr.User, pr.Client, pr.DB, pr.State, pr.Command, pr.Time})
+	}
+	return plugindriver.Response{Result: mustJSON(&plugindriver.ConnQueryResult{
+		Columns: cols, Rows: rows,
+	})}
+}
+
+// actionKill 终止一个会话：内核对「杀自己」返回错误（客户端无需自判）。
+func actionKill(ctx context.Context, drv dbcore.SQLDriver, args map[string]any) plugindriver.Response {
+	pl, ok := dbcore.AsProcessLister(drv)
+	if !ok {
+		return plugindriver.Response{Error: "该引擎不支持会话管理（ProcessLister 未实现）"}
+	}
+	pid := argString(args, "pid")
+	if pid == "" {
+		return plugindriver.Response{Error: "缺少 pid 参数"}
+	}
+	if err := pl.KillProcess(ctx, pid); err != nil {
+		return plugindriver.Response{Error: err.Error()}
+	}
+	return plugindriver.Response{Result: mustJSON(&plugindriver.ConnQueryResult{
+		Columns: []plugindriver.ConnColumn{{Name: "killed"}},
+		Rows:    [][]any{{pid}},
 	})}
 }
 
