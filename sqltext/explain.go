@@ -51,6 +51,21 @@ func ExplainQuery(dbType, sqlText string) (ExplainPlan, error) {
 			Prepare: "EXPLAIN PLAN FOR " + stmt,
 			Query:   "SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, NULL, 'ALL'))",
 		}, nil
+	case DM:
+		// DM8 (verified against a live dm8_single container, 2026-11): the
+		// Oracle spellings both fail — "EXPLAIN PLAN FOR" is a syntax error
+		// (-2007) and DBMS_XPLAN.DISPLAY is unresolved (-2207) — and the
+		// plain "EXPLAIN <stmt>" that disql renders into a plan tree is a
+		// DISQL CLIENT command, not server SQL: through a driver it answers
+		// "Error 9005: 非查询SQL语句". The server-side plan lives in
+		// V$SQL_PLAN, but its shape is DM-specific (PLN_ADDR/HASH_VALUE/
+		// SQLSTR, nothing Oracle's) and only fills after execution, so there
+		// is no statement-shaped recipe. Return the reason: a client shows
+		// an actionable message instead of a mysterious driver error.
+		return ExplainPlan{}, fmt.Errorf(
+			"dm8: EXPLAIN is a disql client command, not server SQL; " +
+				"run the statement and read V$SQL_PLAN (server-side, " +
+				"DM-specific columns) instead")
 	}
 	return ExplainPlan{}, fmt.Errorf("explain is not supported for %s", Normalize(dbType))
 }
@@ -106,5 +121,8 @@ func ExplainPlanStructured(dbType, sqlText string) (plan ExplainPlan, format Exp
 		}, FormatXML, true, nil
 	}
 	// Oracle answers with DBMS_XPLAN text; the caller keeps the grid.
+	// DM8 has no statement-shaped plan either (EXPLAIN is a disql client
+	// command, and V$SQL_PLAN's columns are DM-specific — see
+	// ExplainQuery's DM case for the live-verified details).
 	return ExplainPlan{}, "", false, nil
 }

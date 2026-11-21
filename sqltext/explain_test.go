@@ -1,6 +1,9 @@
 package sqltext
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExplainQuery(t *testing.T) {
 	cases := []struct {
@@ -56,5 +59,27 @@ func TestExplainQueryErrors(t *testing.T) {
 	}
 	if _, err := ExplainQuery("redis", "SELECT 1"); err == nil {
 		t.Error("unknown engine: want error, got nil")
+	}
+}
+
+func TestExplainQueryDMIsAReasonNotAMystery(t *testing.T) {
+	// DM8 has no statement-shaped plan (live-verified: "EXPLAIN PLAN FOR" is
+	// a syntax error, DBMS_XPLAN.DISPLAY is unresolved, and disql's plain
+	// EXPLAIN is a client command a driver cannot run). The error must say
+	// that, so a client shows an actionable message instead of the server's
+	// "Error 9005: 非查询SQL语句".
+	_, err := ExplainQuery("dm", "SELECT * FROM t")
+	if err == nil {
+		t.Fatal("dm: want an error, got a plan")
+	}
+	for _, want := range []string{"dm8", "disql", "V$SQL_PLAN"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("dm error %q does not mention %q", err, want)
+		}
+	}
+	// The dameng spellings normalize to the same answer.
+	_, err2 := ExplainQuery("dameng", "SELECT * FROM t")
+	if err2 == nil || !strings.Contains(err2.Error(), "disql") {
+		t.Errorf("dameng: %v", err2)
 	}
 }
