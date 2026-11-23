@@ -24,11 +24,10 @@ const DriverName = "mongo"
 const dsnScheme = "mongodb"
 
 // DSN renders spec as the mongodb:// URL the driver parses. The scheme is
-// the driver name, the userinfo carries the credentials, and the query
-// carries the database plus any extras (authSource, replicaSet, tls...).
-//
-// The database travels as the driver's "database" parameter: MongoDB selects
-// a database on connect, the way a relational engine selects one.
+// the driver name, the userinfo carries the credentials, and the DATABASE
+// is the URL's PATH ("mongodb://host:27017/novelgen") — that is where the
+// mongo driver reads it from; a "database" query parameter is not a thing
+// it knows and it rejects the whole URL.
 func DSN(spec dbcore.ConnSpec) string {
 	u := url.URL{
 		Scheme: dsnScheme,
@@ -41,10 +40,10 @@ func DSN(spec dbcore.ConnSpec) string {
 			u.User = url.User(spec.User)
 		}
 	}
-	q := url.Values{}
 	if spec.Database != "" {
-		q.Set("database", spec.Database)
+		u.Path = "/" + spec.Database
 	}
+	q := url.Values{}
 	if spec.Schema != "" {
 		q.Set("authSource", spec.Schema)
 	}
@@ -76,7 +75,8 @@ func Open(ctx context.Context, dsn string) (*MongoDriver, error) {
 	}
 	dbName := ""
 	if u, err := url.Parse(dsn); err == nil {
-		dbName = u.Query().Get("database")
+		// The database is the URL's path ("mongodb://host:27017/novelgen").
+		dbName = strings.Trim(u.Path, "/")
 	}
 	return &MongoDriver{client: client, dbName: dbName}, nil
 }

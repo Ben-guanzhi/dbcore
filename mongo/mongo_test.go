@@ -41,11 +41,16 @@ func TestDSNCarriesTheCredentialsAndDatabase(t *testing.T) {
 	dsn := DSN(spec)
 	for _, want := range []string{
 		"mongodb://app:s3cret@db.local:27017",
-		"database=novelgen",
+		// The database is the URL's path: that is where the mongo driver
+		// reads it, and a query parameter would make it reject the URL.
+		"/novelgen",
 	} {
 		if !contains(dsn, want) {
 			t.Fatalf("DSN %q is missing %q", dsn, want)
 		}
+	}
+	if contains(dsn, "database=novelgen") {
+		t.Fatalf("DSN %q carries the database as a query parameter", dsn)
 	}
 	// The auth source rides the schema when the engine needs one.
 	spec.Schema = "admin"
