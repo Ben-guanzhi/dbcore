@@ -33,6 +33,11 @@ const (
 	// driver package; its SQL dialect is Oracle's because DM8's default
 	// compatibility mode is Oracle's.
 	KindDM DatabaseKind = "dm"
+	// KindMongo is MongoDB, a document engine. It speaks the wire protocol, not
+	// SQL: the dbcore/mongo driver exposes collections as virtual tables and
+	// sampled document fields as columns (DBeaver-style), and its Execute
+	// accepts a small, explicit command language rather than pretending SQL runs.
+	KindMongo DatabaseKind = "mongo"
 )
 
 // Error codes (contract §6: error codes must be unified across consumers).
