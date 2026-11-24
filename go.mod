@@ -11,6 +11,7 @@ require (
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/sijms/go-ora/v2 v2.9.0
 	github.com/sophon-zt/sql-driver/dameng v0.0.5
+	github.com/trinodb/trino-go-client v0.313.0
 	go.mongodb.org/mongo-driver/v2 v2.10.1
 	modernc.org/sqlite v1.53.0
 )
@@ -28,9 +29,11 @@ require (
 	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
@@ -50,6 +53,10 @@ require (
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
+	gopkg.in/jcmturner/aescts.v1 v1.0.1 // indirect
+	gopkg.in/jcmturner/dnsutils.v1 v1.0.1 // indirect
+	gopkg.in/jcmturner/gokrb5.v6 v6.1.1 // indirect
+	gopkg.in/jcmturner/rpc.v1 v1.1.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

@@ -38,6 +38,10 @@ const (
 	// PostgreSQL-compatible port exists but rejects a third of the catalog
 	// queries a client needs — so it has a driver package of its own.
 	KindClickHouse DatabaseKind = "clickhouse"
+	// KindTrino is Trino, the distributed SQL query engine (W19). It is not a
+	// database: it federates catalogs, so its "schema" is catalog.schema and
+	// a client browses one level deeper than on a single-database engine.
+	KindTrino DatabaseKind = "trino"
 	// KindMongo is MongoDB, a document engine. It speaks the wire protocol, not
 	// SQL: the dbcore/mongo driver exposes collections as virtual tables and
 	// sampled document fields as columns (DBeaver-style), and its Execute
