@@ -118,6 +118,8 @@ func DefaultPort(kind DatabaseKind) int {
 		return 6379
 	case KindMongo:
 		return 27017
+	case KindClickHouse:
+		return 9000
 	}
 	return 0
 }
@@ -297,7 +299,7 @@ func Open(ctx context.Context, spec ConnSpec, pool PoolConfig) (Driver, error) {
 // enginePackage maps a kind to its subpackage name for error messages.
 func enginePackage(kind DatabaseKind) string {
 	switch kind {
-	case KindSQLite, KindPostgres, KindMySQL, KindMSSQL, KindOracle, KindRedis, KindMongo:
+	case KindSQLite, KindPostgres, KindMySQL, KindMSSQL, KindOracle, KindRedis, KindMongo, KindClickHouse:
 		return string(kind)
 	}
 	return "<engine>"

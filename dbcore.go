@@ -33,6 +33,11 @@ const (
 	// driver package; its SQL dialect is Oracle's because DM8's default
 	// compatibility mode is Oracle's.
 	KindDM DatabaseKind = "dm"
+	// KindClickHouse is ClickHouse, an OLAP column store (W18). It speaks its
+	// own HTTP/native protocol rather than the PostgreSQL wire protocol — the
+	// PostgreSQL-compatible port exists but rejects a third of the catalog
+	// queries a client needs — so it has a driver package of its own.
+	KindClickHouse DatabaseKind = "clickhouse"
 	// KindMongo is MongoDB, a document engine. It speaks the wire protocol, not
 	// SQL: the dbcore/mongo driver exposes collections as virtual tables and
 	// sampled document fields as columns (DBeaver-style), and its Execute

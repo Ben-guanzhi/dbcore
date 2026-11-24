@@ -16,9 +16,9 @@ package plugindriver
 // plugin written for one works with the other host unchanged.
 
 import (
-	"strings"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Ben-guanzhi/dbcore"
 )
@@ -360,11 +360,11 @@ func DecodeConnColumn(raw json.RawMessage) ([]dbcore.ColumnInfo, error) {
 // JSON decodes with zero values and an old host ignores a new plugin's hints.
 // This is the additive-evolution contract of the action protocol.
 type ConnActionParam struct {
-	Name string `json:"name"`
-	Label string `json:"label,omitempty"`
-	Kind string `json:"kind,omitempty"`
-	Required bool `json:"required,omitempty"`
-	Default string `json:"default,omitempty"`
+	Name     string `json:"name"`
+	Label    string `json:"label,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Required bool   `json:"required,omitempty"`
+	Default  string `json:"default,omitempty"`
 	// Options is the direct spelling of a select's choices. An older plugin
 	// may put a JSON array in Default instead; the host accepts both.
 	Options []string `json:"options,omitempty"`
