@@ -38,6 +38,11 @@ const (
 	// PostgreSQL-compatible port exists but rejects a third of the catalog
 	// queries a client needs — so it has a driver package of its own.
 	KindClickHouse DatabaseKind = "clickhouse"
+	// KindDuckDB is DuckDB, the embedded OLAP database (W20). Like SQLite it
+	// is a FILE, not a server: ConnSpec.File carries the path, and an empty
+	// path is an in-memory database. Unlike SQLite it is columnar and speaks
+	// PostgreSQL's SQL dialect closely enough that most catalog queries port.
+	KindDuckDB DatabaseKind = "duckdb"
 	// KindTrino is Trino, the distributed SQL query engine (W19). It is not a
 	// database: it federates catalogs, so its "schema" is catalog.schema and
 	// a client browses one level deeper than on a single-database engine.

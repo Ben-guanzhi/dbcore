@@ -301,7 +301,7 @@ func Open(ctx context.Context, spec ConnSpec, pool PoolConfig) (Driver, error) {
 // enginePackage maps a kind to its subpackage name for error messages.
 func enginePackage(kind DatabaseKind) string {
 	switch kind {
-	case KindSQLite, KindPostgres, KindMySQL, KindMSSQL, KindOracle, KindRedis, KindMongo, KindClickHouse, KindTrino:
+	case KindSQLite, KindPostgres, KindMySQL, KindMSSQL, KindOracle, KindRedis, KindMongo, KindClickHouse, KindTrino, KindDuckDB:
 		return string(kind)
 	}
 	return "<engine>"
