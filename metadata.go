@@ -537,3 +537,113 @@ type CompileError struct {
 	Position int
 	Text     string
 }
+
+// PackageInfo is one PL/SQL package of a schema, as PackageReader reports it.
+//
+// Oracle and DM8 keep a package as two catalog objects — the specification
+// and the body — and either can exist alone while the other is being written:
+// a spec with no body still lets callers compile, and a body without a spec
+// cannot be called at all. Both flags are reported rather than one "complete"
+// verdict, because which half is missing is what tells a user what to do.
+type PackageInfo struct {
+	Name string
+	// HasSpec / HasBody report which halves the data dictionary holds.
+	HasSpec bool
+	HasBody bool
+	// Status is the engine's own spelling (Oracle's VALID/INVALID). A package
+	// whose body failed to compile keeps its callers broken, so this is the
+	// field that says whether it is usable; empty where the engine reports
+	// none.
+	Status string
+}
+
+// JobInfo is one scheduled job.
+//
+// Engines disagree about what a job even is: Oracle and DM8 keep procedure
+// jobs in the data dictionary, MySQL calls them events, SQL Server keeps agent
+// jobs in msdb. What every one of them shares is "something that runs on a
+// schedule", so that is what this row describes — the engine's own fields,
+// named plainly, and the next run time as the engine spells it (empty when the
+// job is not scheduled or already disabled).
+type JobInfo struct {
+	Name string
+	// Kind is the engine's job class: Oracle's JOB_TYPE (STORED PROCEDURE,
+	// PL/SQL BLOCK, ...), MySQL's event status, SQL Server's "AGENT".
+	Kind string
+	// Enabled is the engine's enabled spelling; empty where it reports none.
+	Enabled string
+	// NextRun is the engine-rendered next execution time, empty when the job
+	// will not run again.
+	NextRun string
+}
+
+// SynonymInfo is one alias for another object.
+//
+// A synonym is the one metadata object whose whole point is indirection, so
+// the row says both ends: where the name lives (Owner, which may differ from
+// the schema being listed — a public synonym belongs to PUBLIC) and what it
+// resolves to (TargetOwner.TargetName). For a synonym that points outside the
+// database Oracle reports a database link, which rides TargetOwner's suffix
+// rather than a field of its own.
+type SynonymInfo struct {
+	Name        string
+	Owner       string
+	TargetOwner string
+	TargetName  string
+	// TargetType is the engine's object type when it reports one ("TABLE",
+	// "VIEW", "SYNONYM", ...); empty when the target does not exist or the
+	// engine does not say.
+	TargetType string
+}
+
+// PackageReader reads PL/SQL packages. It is a capability of its own rather
+// than a method on ExtraMetadataReader because only the Oracle-family engines
+// (Oracle, DM8) have packages: PostgreSQL, MySQL, SQL Server and SQLite answer
+// ErrNotSupported, and adding the method to the shared interface would force
+// every driver to spell out a concept it does not have.
+type PackageReader interface {
+	// Packages lists one schema's packages in name order, with which halves
+	// exist and the engine's compile status.
+	Packages(ctx context.Context, schema string) ([]PackageInfo, error)
+	// PackageDefinition returns the DDL that recreates a package: the
+	// specification and the body, each rendered as its own CREATE statement
+	// when that half exists. A package with only one half answers that half —
+	// inventing the other would be writing code the user did not ask for.
+	PackageDefinition(ctx context.Context, schema, name string) (string, error)
+}
+
+// AsPackageReader is the capability assertion helper.
+func AsPackageReader(d Driver) (PackageReader, bool) {
+	x, ok := d.(PackageReader)
+	return x, ok
+}
+
+// JobReader reads scheduled jobs. Separate from ExtraMetadataReader for the
+// same reason as PackageReader: the object exists on most engines but under
+// different names, and each engine answers with its own vocabulary.
+type JobReader interface {
+	// Jobs lists one schema's jobs in name order. PostgreSQL answers an empty
+	// list (it has no in-database scheduler) while the others answer
+	// ErrNotSupported when the catalog they would need is out of reach.
+	Jobs(ctx context.Context, schema string) ([]JobInfo, error)
+}
+
+// AsJobReader is the capability assertion helper.
+func AsJobReader(d Driver) (JobReader, bool) {
+	x, ok := d.(JobReader)
+	return x, ok
+}
+
+// SynonymReader reads object synonyms. Oracle and DM8 are the engines with
+// them; the others answer ErrNotSupported.
+type SynonymReader interface {
+	// Synonyms lists the synonyms visible from one schema in name order —
+	// its own plus the public ones, which is what a resolver would see.
+	Synonyms(ctx context.Context, schema string) ([]SynonymInfo, error)
+}
+
+// AsSynonymReader is the capability assertion helper.
+func AsSynonymReader(d Driver) (SynonymReader, bool) {
+	x, ok := d.(SynonymReader)
+	return x, ok
+}
