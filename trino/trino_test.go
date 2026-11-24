@@ -16,20 +16,52 @@ func TestDSNCarriesCatalogAndSchema(t *testing.T) {
 		User: "analyst", Database: "hive", Schema: "default",
 	}
 	dsn := DSN(spec)
-	for _, want := range []string{"trino://analyst@trino.local:8080", "/hive.default"} {
+	for _, want := range []string{
+		"http://analyst@trino.local:8080",
+		"catalog=hive",
+		"schema=default",
+	} {
 		if !strings.Contains(dsn, want) {
 			t.Errorf("DSN %q is missing %q", dsn, want)
 		}
 	}
-	// A catalog with no schema still rides the path.
-	only := DSN(dbcore.ConnSpec{Kind: dbcore.KindTrino, Host: "h", Port: 8080, Database: "tpch"})
-	if !strings.HasSuffix(only, "/tpch") {
-		t.Errorf("catalog-only DSN = %q", only)
+	// The catalog and schema must NOT ride the path: the client appends
+	// /v1/statement to the base URL, so a path segment makes every query a
+	// 404 at /tpch.tiny/v1/statement.
+	if strings.Contains(strings.SplitN(dsn, "?", 2)[0], "/hive") {
+		t.Fatalf("the catalog went into the path: %q", dsn)
 	}
-	// Only a schema, no catalog: the schema takes the path.
-	sch := DSN(dbcore.ConnSpec{Kind: dbcore.KindTrino, Host: "h", Port: 8080, Schema: "s1"})
-	if !strings.HasSuffix(sch, "/s1") {
-		t.Errorf("schema-only DSN = %q", sch)
+	// The scheme is the TRANSPORT protocol, not the engine name.
+	if strings.HasPrefix(dsn, "trino://") {
+		t.Fatalf("the scheme must be the transport, not the engine: %q", dsn)
+	}
+	if !strings.HasPrefix(dsn, "http://") {
+		t.Fatalf("a plain mode should use http: %q", dsn)
+	}
+	// A TLS mode upgrades it.
+	secure := DSN(dbcore.ConnSpec{Kind: dbcore.KindTrino, Host: "h", Port: 8443, SSLMode: "require"})
+	if !strings.HasPrefix(secure, "https://") {
+		t.Fatalf("a TLS mode should use https: %q", secure)
+	}
+}
+
+// TestDSNSchemaFromParams pins the fallback: the client's connection dialog
+// has no schema box, so the schema arrives through the generic parameter map.
+func TestDSNSchemaFromParams(t *testing.T) {
+	dsn := DSN(dbcore.ConnSpec{
+		Kind: dbcore.KindTrino, Host: "h", Port: 8080,
+		Database: "tpch", Params: map[string]string{"schema": "tiny"},
+	})
+	if !strings.Contains(dsn, "schema=tiny") || !strings.Contains(dsn, "catalog=tpch") {
+		t.Fatalf("DSN = %q", dsn)
+	}
+	// An explicit Schema field wins over the parameter map.
+	both := DSN(dbcore.ConnSpec{
+		Kind: dbcore.KindTrino, Host: "h", Port: 8080,
+		Database: "tpch", Schema: "sf1", Params: map[string]string{"schema": "tiny"},
+	})
+	if !strings.Contains(both, "schema=sf1") {
+		t.Fatalf("the explicit schema did not win: %q", both)
 	}
 }
 

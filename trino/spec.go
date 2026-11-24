@@ -42,8 +42,16 @@ const DriverName = "trino"
 // "schema" (see ListSchemas), which is what makes the tree browse one level
 // deeper than a single-database engine.
 func DSN(spec dbcore.ConnSpec) string {
+	// The client reads the URL's scheme as the TRANSPORT scheme — it builds
+	// its requests as scheme://host/v1/statement — so this must be http or
+	// https, not "trino". The database/sql driver name is what carries the
+	// engine ("trino"; see DriverName).
+	scheme := "http"
+	if enabled, _ := tlsMode(spec.SSLMode); enabled {
+		scheme = "https"
+	}
 	u := url.URL{
-		Scheme: "trino",
+		Scheme: scheme,
 		Host:   spec.Addr(),
 	}
 	if spec.User != "" {
@@ -53,23 +61,27 @@ func DSN(spec dbcore.ConnSpec) string {
 			u.User = url.User(spec.User)
 		}
 	}
-	// catalog[.schema] in the path.
-	path := strings.TrimSpace(spec.Database)
-	if sch := strings.TrimSpace(spec.Schema); sch != "" {
-		if path != "" {
-			path += "." + sch
-		} else {
-			path = sch
-		}
+	// The catalog and schema ride QUERY PARAMETERS, not the URL path. The
+	// client appends /v1/statement to the base URL, so a path segment turns
+	// every query into /tpch.tiny/v1/statement — a 404 the server reports
+	// without saying why. The schema may come from the kernel's Schema field
+	// or, when the caller only has a generic parameter map, from
+	// Params["schema"]: the client's connection dialog has no schema box.
+	q := url.Values{}
+	if cat := strings.TrimSpace(spec.Database); cat != "" {
+		q.Set("catalog", cat)
 	}
-	if path != "" {
-		u.Path = "/" + path
+	sch := strings.TrimSpace(spec.Schema)
+	if sch == "" {
+		sch = strings.TrimSpace(spec.Params["schema"])
 	}
-	if enabled, mode := tlsMode(spec.SSLMode); enabled {
-		q := url.Values{}
-		if mode != "" {
-			q.Set("custom_client", mode)
-		}
+	if sch != "" {
+		q.Set("schema", sch)
+	}
+	if enabled, mode := tlsMode(spec.SSLMode); enabled && mode != "" {
+		q.Set("custom_client", mode)
+	}
+	if len(q) > 0 {
 		u.RawQuery = q.Encode()
 	}
 	return u.String()
