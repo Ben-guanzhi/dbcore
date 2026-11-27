@@ -1,6 +1,9 @@
 package plugindriver
 
 import (
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +108,57 @@ func TestConnBrowseParamsTranslatesFilterSortAfter(t *testing.T) {
 	}
 	if len(params.After) != 1 || params.After[0].Int != 7 {
 		t.Errorf("After = %+v, want [7]", params.After)
+	}
+}
+
+// TestConnQueryCarriesBindArgs pins the fix for a silent data-loss bug:
+// Conn.ExecuteIn encoded bind values into cells but used to leave them out of
+// ConnQueryParams, so every parameterized statement on a plugin connection
+// reached the server with placeholders and no values. Here the host's side of
+// the translation is checked against the exact wire payload.
+func TestConnQueryCarriesBindArgs(t *testing.T) {
+	args := []dbcore.Value{
+		{Kind: dbcore.ValText, S: "O'Brien"},
+		{Kind: dbcore.ValInt, I: 42},
+		{Kind: dbcore.ValNull},
+		{Kind: dbcore.ValBlob, B: []byte{0, 1, 255}},
+	}
+	// Mirror ExecuteIn's encoding into the connection query payload.
+	cells := make([]CellPayload, len(args))
+	for i, a := range args {
+		cells[i] = EncodeValue(a)
+	}
+	params := ConnQueryParams{ConnID: "c1", SQL: "INSERT INTO t VALUES (?, ?, ?, ?)", Args: cells}
+
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ConnQueryParams
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Args) != len(args) {
+		t.Fatalf("args on the wire = %d, want %d: %s", len(decoded.Args), len(args), raw)
+	}
+	for i, cell := range decoded.Args {
+		got, err := DecodeValue(cell)
+		if err != nil {
+			t.Fatalf("arg %d: %v", i, err)
+		}
+		if !reflect.DeepEqual(got, args[i]) {
+			t.Errorf("arg %d = %+v, want %+v", i, got, args[i])
+		}
+	}
+}
+
+// TestConnQueryNoArgsKeepsOldShape checks omitempty directly.
+func TestConnQueryNoArgsKeepsOldShape(t *testing.T) {
+	raw, err := json.Marshal(ConnQueryParams{ConnID: "c1", SQL: "SELECT 1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"args"`) {
+		t.Fatalf("no-arg statement gained an args field: %s", raw)
 	}
 }

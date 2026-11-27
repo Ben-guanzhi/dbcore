@@ -133,6 +133,11 @@ type ConnQueryParams struct {
 	ConnID  string `json:"connId"`
 	SQL     string `json:"sql"`
 	MaxRows int    `json:"maxRows"`
+	// Args carries bound values as tagged cells (see CellPayload). A plugin
+	// that predates this field ignores it and executes a no-arg statement —
+	// which is why a host must not rely on an old plugin for parameterized
+	// writes. It is omitempty so a no-arg statement keeps the old wire shape.
+	Args []CellPayload `json:"args,omitempty"`
 }
 
 // ConnQueryResult answers a connection-oriented query.

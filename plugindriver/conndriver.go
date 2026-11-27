@@ -363,6 +363,10 @@ func (c *Conn) ExecuteIn(exec dbcore.SQLTx, ctx context.Context, query string, a
 		// limit derived from the argument count, which truncated a no-arg
 		// SELECT to one row in any plugin that honors the field.
 		MaxRows: 0,
+		// Bind values travel as tagged cells. Encoding them but leaving them
+		// out of the payload silently dropped every parameter, so a bound
+		// INSERT reached the server with placeholders and no values.
+		Args: cells,
 	})
 	if err != nil {
 		return nil, err
